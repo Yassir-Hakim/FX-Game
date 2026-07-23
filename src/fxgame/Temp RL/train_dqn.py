@@ -56,7 +56,7 @@ def main():
         eval_freq=EVAL_EVERY, n_eval_episodes=EVAL_EPISODES,
         deterministic=True, render=False, verbose = 0)
     
-        #saves a model as a checkpoint
+    #saves a model as a checkpoint
     ckpt_cb = CheckpointCallback(
         save_freq=EVAL_EVERY, save_path=ckpt_dir, name_prefix="dqn")
 

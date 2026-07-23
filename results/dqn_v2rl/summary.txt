@@ -1,0 +1,7 @@
+evaluation games      5000
+mean P/L              -2.691%  (2 s.e. 0.135%)
+median P/L            -3.102%
+P(dollar target met)  1.4%
+mean terminal GBP     22,245
+mean terminal USD     95,982
+reference: always-BdC -1.444%   v2 DP -0.356%

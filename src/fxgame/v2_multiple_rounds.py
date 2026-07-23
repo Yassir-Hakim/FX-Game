@@ -1034,7 +1034,29 @@ def clairvoyant_wealth(spec, Xs, a5s):
         best = np.maximum(best, w)
     return best
 
+# The FLOOR, in closed form. The mirror of the clairvoyant: sell nothing to the
+# MM and dump the whole book at the BdC in round 1, then hold dollars to
+# settlement. No skill, no information used -- what the trader gets for free.
+#
+#     d(a1) = L (1-f) a1 ,  c = 0
+#     W     = [ d - B max(0, T - d) ] / a5
+#
+# a1 is round 1's revealed rate; settlement is `rounds` FURTHER random-walk
+# steps away, so a5 | a1 ~ N(a1, rounds*sd^2) -- kappa takes sqrt(rounds)*sd,
+# NOT sd. The outer expectation over a1 reuses the solver's own quadrature.
 
+def bdc_baseline(spec, grids=None):
+    """E[W] and P/L of always-BdC: the do-nothing floor the DP must beat."""
+    grids = grids or Grids(spec)
+    p = spec.params
+    sd_to_settlement = math.sqrt(spec.rounds) * p.sd
+    EW = 0.0
+    for z, w in zip(grids.rate_samples, grids.rate_weights):
+        a1 = p.a0 + p.sd * z
+        d = spec.L * bdc_payoff_per_pound(a1, p.bdc_fee)
+        payoff = d - spec.B * max(spec.T - d, 0.0)
+        EW += w * payoff * kappa(grids, a1, sd_to_settlement)
+    return EW, (EW - spec.L) / spec.L
 # ==============================================================================
 # 9. VALIDATION
 # ==============================================================================
@@ -1089,10 +1111,22 @@ def gate3_and_4(sol, n_paths=20_000, seed=1, print_progress=True):
     assert res["dollar_err"] < 1e-6 * sol.spec.L, "gate 4 FAILED (dollars)"
     return res
 
+def gate5_brackets(sol, res, print_progress=True):
+    """The DP must beat the do-nothing floor and lose to hindsight."""
+    spec = sol.spec
+    W_bdc, pl_bdc = bdc_baseline(spec, sol.grids)
+    W_cv = float(clairvoyant_wealth(spec, res["X"], res["a5"]).mean())
+    if print_progress:
+        print(f"  always-BdC floor    GBP {W_bdc:,.1f}  ({pl_bdc*100:+.3f}%)")
+        print(f"  DP                  GBP {sol.value:,.1f}  ({sol.pl()*100:+.3f}%)")
+        print(f"  clairvoyant ceiling GBP {W_cv:,.1f}  ({(W_cv-spec.L)/spec.L*100:+.3f}%)")
+    assert sol.value > W_bdc, "gate 5 FAILED: DP is worse than doing nothing"
+    assert sol.value < W_cv,  "gate 5 FAILED: DP beats hindsight"
+    return W_bdc, W_cv
 
 def terminal_examples():
     """The two worked examples in the game rules, as unit tests."""
-    spec = TraderSpec()
+    spec = TraderSpec(L=100_000.0, T=125_000.0, A=0.02, B=0.03)
     # residue: GBP 1,000 left over costs A% of it, i.e. GBP 20
     w = terminal_wealth(spec, 1000.0, spec.T, 1.30)
     assert abs(w - (980.0 + spec.T / 1.30)) < 1e-9
@@ -1231,10 +1265,10 @@ if __name__ == "__main__":
     gate1_v1_anchor(K=3)
     print("  gate 1 PASSED: v2 collapses to v1 (and v0 through it)")
  
- 
-    print("\n[3] Headline solve (Team 1 card: L=100k, T=$125k, A=2%, B=3%, "
-          "4 rounds, K=3)")
+    print("\n[3] Headline solve")
     spec = TraderSpec()
+    print(f"  card: L={spec.L:,.0f}, T=${spec.T:,.0f}, A={spec.A:.0%}, "
+          f"B={spec.B:.0%}, {spec.rounds} rounds, K={spec.K}")
     t0 = time.time()
     sol = solve_v2(spec, print_progress=True)
     print(f"  solved in {time.time() - t0:.0f}s")
@@ -1245,12 +1279,9 @@ if __name__ == "__main__":
     res = gate3_and_4(sol, n_paths=20_000, seed=1)
     print("  gates 3 and 4 PASSED")
  
-    print("\n[5] The clairvoyant benchmark")
-    W_cv = clairvoyant_wealth(spec, res["X"], res["a5"])
-    print(f"  E[hindsight optimum] = GBP {W_cv.mean():,.1f} "
-          f"({(W_cv.mean() - spec.L) / spec.L * 100:+.3f}%)")
-    print(f"  regret = GBP {(W_cv - res['W']).mean():,.1f} per game -- the "
-          f"price of not knowing the path")
+    print("\n[5] Gate 5: the DP is bracketed by the floor and the ceiling")
+    gate5_brackets(sol, res)
+    print("  gate 5 PASSED")
  
     print("\n[6] Regret figure (optimal play vs the clairvoyant)")
     plot_mc_vs_clairvoyant(sol, res)

@@ -31,7 +31,7 @@ import rl_diagnostics as diag
 RUN_NAME      = "dqn_shaped"   # results land in results/<RUN_NAME>/
 SHAPED        = True           # dense potential-based reward (optimum provably unchanged);
                                # False = the sparse terminal-only baseline
-TIMESTEPS     = 1_000_000      # training budget (DQN needs more than PPO: 1,275 actions)
+TIMESTEPS     = 2_000_000      # training budget (DQN needs more than PPO: 1,275 actions)
 SEED          = 0
 EVAL_EVERY    = 50_000         # timesteps between deterministic evals (the curve)
 EVAL_EPISODES = 2_000          # episodes per eval point

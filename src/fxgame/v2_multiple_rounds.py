@@ -45,7 +45,9 @@ import matplotlib.pyplot as plt
 from fx_mechanics import (
     GameParams,
     mm_accepts,
-    bdc_payoff_per_pound,
+    trade_rate,
+    rate_units,
+    bdc_payoff_per_unit,
     A0_DEFAULT,
     sd_DEFAULT,
     BDC_FEE_DEFAULT,
@@ -62,16 +64,17 @@ NO_FLOOR = -1          # sentinel floor index: "no floor learned yet"  (z = -inf
 class TraderSpec:
     """
 
-    L        starting pounds.
-    T        dollar target. 
-    A        residue penalty rate on pounds still held at the end.
-    B        deficit penalty rate on the dollar shortfall below T.
+    L        starting capital, in the INITIAL currency (pounds on side "A",
+             dollars on side "B").
+    T        the target, in the TARGET currency (dollars on "A", pounds on "B").
+    A        residue penalty rate on initial currency still held at the end.
+    B        deficit penalty rate on the target-currency shortfall below T.
     rounds   trading rounds (the game's round 5 is MM book-clearing only; for
              the trader it collapses to drawing the settlement rate a5).
     K        sequential offers per round.
     all_or_nothing   gate-1 switch: force q = everything, as in v1.
     terminal_mode    "pounds" is the official P/L; "dollars" is gate 1's
-                     objective (maximise expected dollars, exactly v1's).
+                     objective (maximise expected dollars, exactly v1's).    
     """
     L: float = 100_000.0
     T: float = 125_000.0
@@ -83,6 +86,34 @@ class TraderSpec:
     all_or_nothing: bool = False
     terminal_mode: str = "pounds"
     q_floor: float = 0.0          
+    side: str = "A"               # "A": start pounds, target dollars (T1 family)
+                                  # "B": start dollars, target pounds (T4 family)
+
+
+# ------------------------------------------------------------------------------
+#
+#   the REFLECTION. Prices live on a z-grid, P = a + sd z. The MM takes a
+#   seller's offer when it is BELOW the hidden rate and a buyer's when it is
+#   ABOVE, so acceptance floors the rate for one and caps it for the other --
+#   and the bracket machinery below hardcodes accept -> floor. Reading the
+#   buyer's grid DOWNWARDS, z |-> a - sd z, is the reflection Y = 2a - X: it
+#   flips the inequality while leaving the law exactly N(a, sd^2), so Phi, the
+#   quadrature and the prefix sums are inherited untouched. Working in the
+#   reciprocal rate 1/X instead would NOT do this -- 1/X is skewed, and the
+#   normal machinery would be wrong in the tails.
+#
+# Settlement is the one asymmetry that is not a mirror: the seller converts
+# dollars at 1/a5, which is convex and needs kappa = E[1/a5] (Jensen), while the
+# buyer converts pounds at a5, which is LINEAR, so the martingale gives
+# E[a5 | a4] = a4 exactly and no quadrature is needed. 
+# ------------------------------------------------------------------------------
+
+def _rate_at(spec, a, z):
+    """The real rate ($/GBP) at grid coordinate z -- an offer price, or a
+    quadrature node. The buyer reads the grid downwards (the reflection)."""
+    if spec.side == "B":
+        return a - spec.params.sd * z
+    return a + spec.params.sd * z
 
 
 # ==============================================================================
@@ -167,7 +198,13 @@ class Grids:
 
         # ---- dollars, with the target on a node ------------------------------
         a_top = params.a0 + (a_halfwidth_sds + zmax) * params.sd #highest possible rate
-        d_need = max(spec.L * a_top, 1.25 * spec.T)   # worst reachable dollars
+        if spec.side == "B":
+            # the buyer's target currency is POUNDS bought at 1/rate, so the
+            # reach is set by the LOWEST rate, not the highest
+            a_bot = max(params.a0 - (a_halfwidth_sds + zmax) * params.sd, 0.2)
+            d_need = max(spec.L / a_bot, 1.25 * spec.T)
+        else:
+            d_need = max(spec.L * a_top, 1.25 * spec.T)   # worst reachable dollars
         self.jT = max(1, int(math.floor((n_d - 1) * spec.T / d_need))) #find the index which landes on T for the kink
         self.dd = spec.T / self.jT #sets the spacing so T lands exactly on node jT. 
         self.n_d = n_d
@@ -312,7 +349,9 @@ def terminal_matrix(spec, grids, a4):
 
     # Real scoring, = c(1-A) + [d - B*max(0, T-d)] * kappa :
 
-    k = kappa(grids, a4, spec.params.sd)             #
+    # seller: dollars convert at 1/a5, convex -> kappa by quadrature (Jensen).
+    # buyer: pounds convert at a5, LINEAR -> E[a5 | a4] = a4 exactly.
+    k = kappa(grids, a4, spec.params.sd) if spec.side == "A" else a4  #
     dpart = (grids.d - spec.B * np.maximum(spec.T - grids.d, 0.0)) * k
     cpart = grids.c * (1.0 - spec.A)
     # combine into a full (pounds x dollars) table
@@ -323,6 +362,8 @@ def terminal_wealth(spec, c, d, a5):
     """The realised accounting for one finished game (the simulator uses it)."""
     if spec.terminal_mode == "dollars":
         return d
+    if spec.side == "B":
+        return c * (1.0 - spec.A) + (d - spec.B * max(spec.T - d, 0.0)) * a5
     return c * (1.0 - spec.A) + (d - spec.B * max(spec.T - d, 0.0)) / a5
 
 # ==============================================================================
@@ -375,13 +416,13 @@ def solve_round(spec, grids, Wnext, a):
     # and value where we land against next round's value Wnext.
     R = np.empty((nq, nc, nd))
     for t in range(nq):
-        X = a + p.sd * grids.rate_samples[t]         # this rate-sample
+        X = _rate_at(spec, a, grids.rate_samples[t])  # this rate-sample
         Wt = grids.matrix_at(Wnext, X)               # next round's value at X
-        rate = bdc_payoff_per_pound(X, f)            # BdC pays (1-fee)*X per GBP
+        rate = bdc_payoff_per_unit(X, f, spec.side)  # target per unit at the BdC
         best = np.full((nc, nd), -np.inf)
         for frac in grids.f_all:                     # try every dump fraction
-            lc = grids.c * (1.0 - frac)              # pounds left after dumping
-            ld = grids.d[None, :] + rate * (frac * grids.c[:, None])  # $ gained
+            lc = grids.c * (1.0 - frac)        # initial ccy left after dumping
+            ld = grids.d[None, :] + rate * (frac * grids.c[:, None])  # target gained
             np.maximum(best, grids.bilinear_grid(Wt, lc, ld), out=best)
         R[t] = best
 
@@ -415,7 +456,7 @@ def solve_round(spec, grids, Wnext, a):
         # AV[pi, hi] = best value if an offer at price pi (ceiling hi) is ACCEPTED. 
         AV = np.full((no, no + 1, nc, nd), np.nan)
         for pi in range(no):
-            P = a + p.sd * grids.z[pi]               # the price at index pi
+            P = trade_rate(_rate_at(spec, a, grids.z[pi]), spec.side)  # at pi
             for hi in range(pi + 1, no + 1):
                 if aon:
                     # All-or-nothing (Gate 1 only): q is forced to ALL of c, so
@@ -582,7 +623,8 @@ def greedy_offer_action(sol, n, k_rem, lo, hi, c, d, a):
     if p_start >= hi or c < 0:
         return None, stop
     price_indices = np.arange(p_start, hi)               # candidate offer prices
-    price_values = a + sd * grids.z[price_indices]       # those prices in $/£
+    price_values = trade_rate(_rate_at(spec, a, grids.z[price_indices]),
+                              spec.side)     # in the trader's units (target/unit)
     PhiH, PhiL = grids.PhiH(hi), grids.PhiL(lo)
     mass = PhiH - PhiL
     wA = (PhiH - grids.Phi[price_indices]) / mass         # P(accept) per price
@@ -689,7 +731,8 @@ def greedy_bdc_action(sol, n, c, d, X):
     matrix = grids.matrix_at(sol.Wtables[n + 1], X)
     m = grids.f_all * c
     vals = grids.bilinear(matrix, c - m,
-                      d + bdc_payoff_per_pound(X, spec.params.bdc_fee) * m)
+                      d + bdc_payoff_per_unit(X, spec.params.bdc_fee,
+                                               spec.side) * m)
     return float(m[int(np.argmax(vals))])
  
  
@@ -732,20 +775,25 @@ def play_game(sol, seed=None, rng=None, path=None, a5=None):
             if action is None:
                 break                                   # stop early: to the BdC
             pi, q = action
-            P = a + p.sd * grids.z[pi]
-            accepted = mm_accepts(P, X)                  
+            price = _rate_at(spec, a, grids.z[pi])
+            P = trade_rate(price, spec.side)
+            accepted = mm_accepts(price, X, spec.side)                  
             if accepted:
                 c -= q
                 d += P * q
                 lo = pi                                  # floor learned
             else:
                 hi = pi                                  # ceiling learned
+            # "P" is the trader's rate (target per unit held); "quote" is the
+            # $/GBP number on the slip. They differ for the buyer, and only the
+            # quote is comparable with the hidden rate X -- so plots that draw
+            # an offer against X must use the quote, not P.
             offers.append({"offer_no": spec.K - k_rem + 1, "z": grids.z[pi],
-                           "P": P, "q": q, "accepted": accepted,
+                           "P": P, "quote": price, "q": q, "accepted": accepted,
                            "c": c, "d": d})
         m = greedy_bdc_action(sol, n, c, d, X)           # BdC sub-phase
         if m > 0:
-            d += bdc_payoff_per_pound(X, p.bdc_fee) * m
+            d += bdc_payoff_per_unit(X, p.bdc_fee, spec.side) * m
             c -= m
         rounds.append({"n": n, "anchor": a, "X": X, "offers": offers,
                        "bdc_dump": m, "c": c, "d": d})
@@ -762,8 +810,9 @@ def print_game_trace(trace):
     BdC dump, and the running position -- the literal 'how the optimal player
     plays' table."""
     spec = trace["spec"]
+    i_sym, t_sym = ("GBP", "$") if spec.side == "A" else ("$", "GBP")
     print(f"{'':2}anchor   hidden X      offer            verdict     "
-          f"-> pounds left   dollars banked")
+          f"-> {i_sym} left   {t_sym} banked")
     for r in trace["rounds"]:
         zX = (r["X"] - r["anchor"]) / spec.params.sd
         head = f"Round {r['n']}: a={r['anchor']:.4f}  X={r['X']:.4f} (z={zX:+.2f})"
@@ -773,31 +822,37 @@ def print_game_trace(trace):
             print("  (no offer made -- straight to the BdC)")
         for o in r["offers"]:
             verdict = "ACCEPT" if o["accepted"] else "reject"
-            print(f"  offer {o['offer_no']}: P={o['P']:.4f} (z={o['z']:+.2f})  "
-                  f"sell GBP {o['q']:>8,.0f}   {verdict:>6}   "
-                  f"-> c={o['c']:>8,.0f}   d=${o['d']:>10,.0f}")
+            print(f"  offer {o['offer_no']}: {o['P']:.4f} "
+                  f"{rate_units(spec.side)} (slip {o['quote']:.4f} $/GBP, "
+                  f"z={o['z']:+.2f})  "
+                  f"sell {i_sym} {o['q']:>8,.0f}   {verdict:>6}   "
+                  f"-> c={o['c']:>8,.0f}   d={o['d']:>10,.0f}")
         if r["bdc_dump"] > 1e-6:
-            print(f"  BdC: dump GBP {r['bdc_dump']:>8,.0f} at (1-f)X "
-                  f"                     -> c={r['c']:>8,.0f}   d=${r['d']:>10,.0f}")
+            print(f"  BdC: dump {i_sym} {r['bdc_dump']:>8,.0f} at the BdC rate"
+                  f"                -> c={r['c']:>8,.0f}   d={r['d']:>10,.0f}")
         else:
             print(f"  BdC: carry (no dump)"
                   f"                             -> c={r['c']:>8,.0f}   "
-                  f"d=${r['d']:>10,.0f}")
+                  f"d={r['d']:>10,.0f}")
     print("=" * 78)
     short = max(0.0, spec.T - trace["d"])
-    print(f"Settlement a5={trace['a5']:.4f} | end c=GBP {trace['c']:,.0f}, "
-          f"d=${trace['d']:,.0f} (target ${spec.T:,.0f}, "
-          f"{'short $%.0f' % short if short > 1 else 'target met'}) | "
-          f"W=GBP {trace['W']:,.0f}  P/L={trace['pl']*100:+.2f}%")
+    print(f"Settlement a5={trace['a5']:.4f} | end c={i_sym} {trace['c']:,.0f}, "
+          f"d={t_sym} {trace['d']:,.0f} (target {t_sym} {spec.T:,.0f}, "
+          f"{'short %s %.0f' % (t_sym, short) if short > 1 else 'target met'}) | "
+          f"W={i_sym} {trace['W']:,.0f}  P/L={trace['pl']*100:+.2f}%")
  
  
 def plot_game(trace, save_path=None, ax_rate=None, ax_inv=None, title=None):
     """Two stacked panels sharing the game timeline:
-       top    the offer ladder against the hidden rate -- filled green =
-              accepted, open red = rejected, marker size ~ pounds offered;
-       bottom inventory: pounds remaining (drains to 0) and dollars banked as
-              a fraction of target (should cross 1.0)."""
+       top    the offer ladder against the hidden rate, everything shown in
+              the TRADER's units (target per unit held) so both sides read the
+              same way -- filled green = accepted, open red = rejected, marker
+              size ~ initial currency offered;
+       bottom inventory: initial currency remaining (drains to 0) and target
+              currency banked as a fraction of T (should cross 1.0)."""
     spec = trace["spec"]
+    side = spec.side
+    i_sym, t_sym = ("GBP", "$") if side == "A" else ("$", "GBP")
     own_fig = ax_rate is None
     if own_fig:
         fig, (ax_rate, ax_inv) = plt.subplots(
@@ -811,10 +866,12 @@ def plot_game(trace, save_path=None, ax_rate=None, ax_inv=None, title=None):
         x0 = x + 0.5
         n_ev = max(len(r["offers"]), 1)
         # hidden rate as a band across this round's offers
-        ax_rate.hlines(r["X"], x0, x0 + n_ev, color="tab:purple", lw=1.6,
+        ax_rate.hlines(trade_rate(r["X"], side), x0, x0 + n_ev,
+                       color="tab:purple", lw=1.6,
                        ls="--", alpha=0.8,
                        label="hidden true rate X" if r["n"] == 1 else None)
-        ax_rate.plot([x0 - 0.3], [r["anchor"]], marker="_", ms=14,
+        ax_rate.plot([x0 - 0.3], [trade_rate(r["anchor"], side)],
+                     marker="_", ms=14,
                      color="grey",
                      label="anchor (last revealed)" if r["n"] == 1 else None)
         for o in r["offers"]:
@@ -837,7 +894,9 @@ def plot_game(trace, save_path=None, ax_rate=None, ax_inv=None, title=None):
         if len(r["offers"]) == 0:
             x += 1
         if r["bdc_dump"] > 1e-6:
-            ax_rate.scatter([x + 0.4], [(1 - spec.params.bdc_fee) * r["X"]],
+            ax_rate.scatter([x + 0.4],
+                            [bdc_payoff_per_unit(r["X"], spec.params.bdc_fee,
+                                                 side)],
                             marker="s", s=70, c="tab:orange", edgecolors="k",
                             zorder=5,
                             label="BdC dump" if not any(
@@ -850,14 +909,14 @@ def plot_game(trace, save_path=None, ax_rate=None, ax_inv=None, title=None):
         x += 1
  
     # settlement
-    ax_rate.plot([x + 0.3], [trace["a5"]], marker="*", ms=16, c="k",
-                 label="settlement a5")
+    ax_rate.plot([x + 0.3], [trade_rate(trace["a5"], side)], marker="*",
+                 ms=16, c="k", label="settlement a5")
  
     for (lo, hi, n) in round_spans:
         ax_rate.axvspan(lo, hi, color="grey", alpha=0.05)
         ax_rate.text((lo + hi) / 2, ax_rate.get_ylim()[1], f"round {n}",
                      ha="center", va="bottom", fontsize=8, color="grey")
-    ax_rate.set_ylabel("exchange rate ($/GBP)")
+    ax_rate.set_ylabel(f"rate ({rate_units(side)} -- target per unit held)")
     ax_rate.set_title(title or
                       f"Optimal play, P/L = {trace['pl']*100:+.2f}%")
     ax_rate.legend(fontsize=7, loc="upper left", ncol=2)
@@ -865,9 +924,9 @@ def plot_game(trace, save_path=None, ax_rate=None, ax_inv=None, title=None):
     ax_rate.spines["right"].set_visible(False)
  
     ax_inv.step(cser_x, np.array(cser_y) / spec.L, where="post",
-                color="tab:blue", lw=1.8, label="pounds left / L")
+                color="tab:blue", lw=1.8, label=f"{i_sym} left / L")
     ax_inv.step(dser_x, np.array(dser_y) / spec.T, where="post",
-                color="tab:green", lw=1.8, label="dollars banked / T")
+                color="tab:green", lw=1.8, label=f"{t_sym} banked / T")
     ax_inv.axhline(1.0, ls=":", color="grey", label="target")
     ax_inv.set_ylabel("fraction")
     ax_inv.set_xlabel("offer / event through the game")
@@ -953,7 +1012,7 @@ def optimal_strategy(spec, rate_path=None, a5=None, seed=11,
 # ==============================================================================
 #
 # Play the tables for real, through the SHARED rules -- mm_accepts decides
-# every trade and bdc_payoff_per_pound prices every dump, exactly as in v0 and
+# every trade and bdc_payoff_per_unit prices every dump, exactly as in v0 and
 # v1. Every path also keeps the books of all three parties so that money
 # conservation (gate 4) is checked on the same run.
 
@@ -982,8 +1041,9 @@ def simulate_paths(sol, n_paths=20_000, seed=0, print_progress=False):
                 if action is None:
                     break
                 p_i, q = action
-                P = a + p.sd * grids.z[p_i]
-                if mm_accepts(P, X):                  # the shared rule
+                price = _rate_at(spec, a, grids.z[p_i])
+                P = trade_rate(price, spec.side)
+                if mm_accepts(price, X, spec.side):   # the shared rule
                     c -= q
                     d += P * q
                     mm_p += q
@@ -994,7 +1054,8 @@ def simulate_paths(sol, n_paths=20_000, seed=0, print_progress=False):
             # BdC stage: X is revealed
             m = greedy_bdc_action(sol, n, c, d, X)
             if m > 0:
-                pay = bdc_payoff_per_pound(X, p.bdc_fee) * m   # shared rule
+                pay = bdc_payoff_per_unit(X, p.bdc_fee, spec.side)  # shared
+                pay = pay * m
                 c -= m
                 d += pay
                 bdc_p += m
@@ -1023,14 +1084,23 @@ def simulate_paths(sol, n_paths=20_000, seed=0, print_progress=False):
 #     W_cv(s) = (L - s)(1 - A) + [ s r* - B max(0, T - s r*) ] / a5
 
 def clairvoyant_wealth(spec, Xs, a5s):
-    r = Xs.max(axis=1)
+    # best target-per-initial-unit in the best round: the seller wants the
+    # HIGHEST rate, the buyer (paying that rate per pound) wants the LOWEST
+    if spec.side == "B":
+        r = (1.0 / Xs).max(axis=1)
+    else:
+        r = Xs.max(axis=1)
     cands = [np.zeros_like(r), np.full_like(r, spec.L)]
     s_kink = spec.T / r
     cands.append(np.where(s_kink <= spec.L, s_kink, 0.0))
     best = np.full(r.shape, -np.inf)
     for s in cands:
-        w = (spec.L - s) * (1 - spec.A) \
-            + (s * r - spec.B * np.maximum(spec.T - s * r, 0.0)) / a5s
+        if spec.side == "B":
+            w = (spec.L - s) * (1 - spec.A) \
+                + (s * r - spec.B * np.maximum(spec.T - s * r, 0.0)) * a5s
+        else:
+            w = (spec.L - s) * (1 - spec.A) \
+                + (s * r - spec.B * np.maximum(spec.T - s * r, 0.0)) / a5s
         best = np.maximum(best, w)
     return best
 
@@ -1053,9 +1123,11 @@ def bdc_baseline(spec, grids=None):
     EW = 0.0
     for z, w in zip(grids.rate_samples, grids.rate_weights):
         a1 = p.a0 + p.sd * z
-        d = spec.L * bdc_payoff_per_pound(a1, p.bdc_fee)
+        d = spec.L * bdc_payoff_per_unit(a1, p.bdc_fee, spec.side)
         payoff = d - spec.B * max(spec.T - d, 0.0)
-        EW += w * payoff * kappa(grids, a1, sd_to_settlement)
+        # buyer settles LINEARLY, and the walk is a martingale: E[a5 | a1] = a1
+        EW += w * payoff * (kappa(grids, a1, sd_to_settlement)
+                            if spec.side == "A" else a1)
     return EW, (EW - spec.L) / spec.L
 # ==============================================================================
 # 9. VALIDATION
@@ -1067,10 +1139,14 @@ def gate1_v1_anchor(K=3, print_progress=True):
     closed form. Run at a fine price grid; compare every offer budget up to K.
     """
     from v1_sequential_offers import solve_v1
-    from v0_game import closed_form_optimal_rate, expected_dollars_per_pound
+    from v0_game import closed_form_optimal_rate, expected_target_per_unit
 
+    # side is PINNED to "A" here: v1 and v0's closed form model the seller,
+    # so this spec must not inherit the file's default side. Without the pin,
+    # a default of side="B" makes gate 1 compare a buyer-v2 against a
+    # seller-v1 and fail (or worse, pass for the wrong reason).
     spec = TraderSpec(rounds=1, K=K, B=0.0, all_or_nothing=True,
-                      terminal_mode="dollars")
+                      terminal_mode="dollars", side="A")
     grids = Grids(spec, n_offer=161, quad_per_cell=3, n_c=2, n_d=5, n_a=3)
     _, Ulv, _ = solve_round(spec, grids, np.stack(
         [terminal_matrix(spec, grids, a4) for a4 in grids.a]), spec.params.a0)
@@ -1085,7 +1161,7 @@ def gate1_v1_anchor(K=3, print_progress=True):
             print(f"  K={k}: v2 {v2_val:.6f}  v1 {v1.value(k):.6f}  "
                   f"gap {gap:.2e}")
     P_star = closed_form_optimal_rate(A0_DEFAULT, sd_DEFAULT, BDC_FEE_DEFAULT)
-    v0_val = expected_dollars_per_pound(P_star)
+    v0_val = expected_target_per_unit(P_star)
     gap0 = abs(Ulv[1][NO_FLOOR + 1, grids.n_offer][grids.n_c - 1, 0] / spec.L - v0_val)
     if print_progress:
         print(f"  K=1 vs v0 closed form: gap {gap0:.2e}")
@@ -1103,8 +1179,9 @@ def gate3_and_4(sol, n_paths=20_000, seed=1, print_progress=True):
     if print_progress:
         print(f"  DP claim {sol.value:,.1f}   MC {mc:,.1f} +/- {2*se:,.1f} "
               f"(2 s.e.)   gap {gap:+,.1f}  [tolerance {tol:,.1f}]")
-        print(f"  money conservation: worst pound error "
-              f"{res['pound_err']:.2e}, worst dollar error "
+        i_sym, t_sym = ("GBP", "$") if sol.spec.side == "A" else ("$", "GBP")
+        print(f"  money conservation: worst {i_sym} error "
+              f"{res['pound_err']:.2e}, worst {t_sym} error "
               f"{res['dollar_err']:.2e}")
     assert abs(gap) < tol, f"gate 3 FAILED: gap {gap:+.1f} vs tol {tol:.1f}"
     assert res["pound_err"] < 1e-6 * sol.spec.L, "gate 4 FAILED (pounds)"
@@ -1117,29 +1194,41 @@ def gate5_brackets(sol, res, print_progress=True):
     W_bdc, pl_bdc = bdc_baseline(spec, sol.grids)
     W_cv = float(clairvoyant_wealth(spec, res["X"], res["a5"]).mean())
     if print_progress:
-        print(f"  always-BdC floor    GBP {W_bdc:,.1f}  ({pl_bdc*100:+.3f}%)")
-        print(f"  DP                  GBP {sol.value:,.1f}  ({sol.pl()*100:+.3f}%)")
-        print(f"  clairvoyant ceiling GBP {W_cv:,.1f}  ({(W_cv-spec.L)/spec.L*100:+.3f}%)")
+        i_sym = "GBP" if spec.side == "A" else "$"
+        print(f"  always-BdC floor    {i_sym} {W_bdc:,.1f}  ({pl_bdc*100:+.3f}%)")
+        print(f"  DP                  {i_sym} {sol.value:,.1f}  ({sol.pl()*100:+.3f}%)")
+        print(f"  clairvoyant ceiling {i_sym} {W_cv:,.1f}  ({(W_cv-spec.L)/spec.L*100:+.3f}%)")
     assert sol.value > W_bdc, "gate 5 FAILED: DP is worse than doing nothing"
     assert sol.value < W_cv,  "gate 5 FAILED: DP beats hindsight"
     return W_bdc, W_cv
 
 def terminal_examples():
     """The two worked examples in the game rules, as unit tests."""
-    spec = TraderSpec(L=100_000.0, T=125_000.0, A=0.02, B=0.03)
+    spec = TraderSpec(L=100_000.0, T=125_000.0, A=0.02, B=0.03, side = "A")
     # residue: GBP 1,000 left over costs A% of it, i.e. GBP 20
     w = terminal_wealth(spec, 1000.0, spec.T, 1.30)
     assert abs(w - (980.0 + spec.T / 1.30)) < 1e-9
     # deficit: USD 1,000 short of target costs B% of it, converted at a5
     w = terminal_wealth(spec, 0.0, spec.T - 1000.0, 1.30)
     assert abs(w - ((spec.T - 1000.0) - 0.03 * 1000.0) / 1.30) < 1e-9
-    print("  both worked examples from the rules: PASSED")
+    print("  both worked examples from the rules: PASSED (seller's card)")
+    # the rules print worked examples for the seller only; these are the same
+    # two rules applied to the buyer's card, so both sides' accounting is tested
+    specB = TraderSpec(L=500_000.0, T=396_000.0, A=0.00, B=0.20, side="B")
+    # residue: T4 carries no penalty on leftover dollars
+    w = terminal_wealth(specB, 10_000.0, specB.T, 1.30)
+    assert abs(w - (10_000.0 + specB.T * 1.30)) < 1e-9
+    # deficit: GBP 1,000 short of target costs B% of it, converted at a5
+    w = terminal_wealth(specB, 0.0, specB.T - 1000.0, 1.30)
+    assert abs(w - ((specB.T - 1000.0) - 0.20 * 1000.0) * 1.30) < 1e-9
+    print("  the same two rules on the buyer's card: PASSED")
 
 # ==============================================================================
 # 10. PLOTS
 # ==============================================================================
 def plot_kink_and_policy(sol, save_path="v2_fig1_policy.png"):
-    """Left: the marginal pound-value of a banked dollar, by round -- the
+    """Left: the marginal value, in initial currency, of one more unit of
+    TARGET currency banked, by round -- the
     settlement kink at the target coming into focus as the deadline nears.
     Right: the last-offer price by round, showing the deadline (not the kink)
     driving aggression. Both are read from the solved tables at a fixed
@@ -1147,6 +1236,7 @@ def plot_kink_and_policy(sol, save_path="v2_fig1_policy.png"):
     varies -- this isolates the mechanism, it is not an average over played
     games."""
     spec, grids = sol.spec, sol.grids
+    i_sym, t_sym = ("GBP", "$") if spec.side == "A" else ("$", "GBP")
     ia0 = (grids.n_a - 1) // 2                     # the a0 node
     ci = (grids.n_c - 1) // 2                      # a mid-book row (c = L/2)
 
@@ -1169,10 +1259,16 @@ def plot_kink_and_policy(sol, save_path="v2_fig1_policy.png"):
         ax1.plot(dmid / 1000, slope, lw=lw, label=lbl, color=color)
     ax1.axvline(spec.T / 1000, ls="--", color="grey", lw=1)
     ax1.annotate("target T", (spec.T / 1000 + 2, ax1.get_ylim()[0]), fontsize=9)
-    ax1.set_xlabel("dollars banked d ($k)")
-    ax1.set_ylabel("marginal value of a banked dollar (pounds per dollar)")
-    ax1.set_title("Marginal value of a dollar:\n"
-                  "worth (1+B)/rate when short of T, 1/rate when past it")
+    ax1.set_xlabel(f"{t_sym} banked, d ({t_sym}k)")
+    ax1.set_ylabel(f"marginal value of one more {t_sym} ({i_sym} per {t_sym})")
+    # the slope itself is side-specific: the seller divides by the settlement
+    # rate, the buyer multiplies by it
+    if spec.side == "A":
+        ax1.set_title("Marginal value of a banked $:\n"
+                      "worth (1+B)/rate when short of T, 1/rate when past it")
+    else:
+        ax1.set_title("Marginal value of a banked GBP:\n"
+                      "worth (1+B) x rate when short of T, the rate past it")
     ax1.legend(fontsize=8)
 
     # ---- right: one-shot execution price by round (deadline aggression) ------
@@ -1183,13 +1279,22 @@ def plot_kink_and_policy(sol, save_path="v2_fig1_policy.png"):
         act, _ = greedy_offer_action(sol, n, 1, NO_FLOOR, grids.n_offer,
                                      spec.L, 0.0, a_use)
         zstars.append(grids.z[act[0]] if act is not None else np.nan)
+    # z on the grid points TOWARD GREED for both sides (the seller's grid
+    # reads upward from the anchor, the buyer's downward), so this panel is
+    # comparable across sides -- but the one-shot reference is NOT the same
+    # number: it is v0's own optimum for THIS side, computed rather than
+    # hardcoded (+1.44 sd for the seller, 1.75 sd for the buyer).
+    from v0_game import closed_form_optimal_rate
+    p0 = spec.params
+    zref = abs(closed_form_optimal_rate(p0.a0, p0.sd, p0.bdc_fee, spec.side)
+               - p0.a0) / p0.sd
     ax2.step(rounds, zstars, where="mid", marker="o", lw=2, color="tab:orange",
-             label="last-offer price z* (sigma above anchor)")
-    ax2.axhline(1.44, ls=":", color="grey",
-                label="single-round optimum z* = +1.44 (v1)")
+             label="last-offer z* (sd from anchor, greedy direction)")
+    ax2.axhline(zref, ls=":", color="grey",
+                label=f"single-round optimum |z*| = {zref:.2f} (v0)")
     ax2.set_xlabel("round")
-    ax2.set_ylabel("last-offer price (sd above anchor; higher = holds out)")
-    ax2.set_title("Last offer price risk decreases over time (round 4 -> the v1 price)")
+    ax2.set_ylabel("last-offer distance from anchor (sd; higher = holds out)")
+    ax2.set_title("Last-offer risk decreases over time (round 4 -> the one-shot v0 price)")
     ax2.set_xticks(rounds)
     ax2.legend(fontsize=8)
 
@@ -1204,6 +1309,7 @@ def plot_kink_and_policy(sol, save_path="v2_fig1_policy.png"):
 def plot_value_surface(sol, save_path="v2_fig2_value.png"):
     """The round-1 value matrix: what any (c, d) start would be worth."""
     spec, grids = sol.spec, sol.grids
+    i_sym, t_sym = ("GBP", "$") if spec.side == "A" else ("$", "GBP")
     fig, ax = plt.subplots(figsize=(7.2, 5))
     pl_pct = (sol.entry1 - spec.L) / spec.L * 100.0
     cs = ax.contourf(grids.d / 1000, grids.c / 1000, pl_pct, levels=25, cmap="RdYlGn")
@@ -1213,8 +1319,8 @@ def plot_value_surface(sol, save_path="v2_fig2_value.png"):
     ax.plot(0, spec.L / 1000, marker="*", color="k", ms=14)
     ax.annotate("the actual start (L, 0)", (2, spec.L / 1000 * 0.96),
                 fontsize=9)
-    ax.set_xlabel("dollars banked d ($k)")
-    ax.set_ylabel("pounds held c (GBPk)")
+    ax.set_xlabel(f"{t_sym} banked, d ({t_sym}k)")
+    ax.set_ylabel(f"{i_sym} held, c ({i_sym}k)")
     ax.set_title("Round-1 value of every starting book (P/L %, black = flat)")
     fig.colorbar(cs, ax=ax, label="expected P/L (%)")
     plt.tight_layout()
@@ -1237,8 +1343,9 @@ def plot_mc_vs_clairvoyant(sol, res, save_path="v2_fig3_regret.png"):
     ax.set_xlabel("final P/L (%)")
     ax.set_ylabel("paths")
     regret = (W_cv - res["W"]).mean()
+    i_sym = "GBP" if spec.side == "A" else "$"
     ax.set_title(f"Optimal play vs hindsight: regret "
-                 f"GBP {regret:,.0f} per game "
+                 f"{i_sym} {regret:,.0f} per game "
                  f"({regret / spec.L * 100:.2f}% of capital)")
     ax.legend(fontsize=9)
     ax.spines["top"].set_visible(False)
@@ -1267,12 +1374,13 @@ if __name__ == "__main__":
  
     print("\n[3] Headline solve")
     spec = TraderSpec()
-    print(f"  card: L={spec.L:,.0f}, T=${spec.T:,.0f}, A={spec.A:.0%}, "
-          f"B={spec.B:.0%}, {spec.rounds} rounds, K={spec.K}")
+    i_sym, t_sym = ("GBP", "$") if spec.side == "A" else ("$", "GBP")
+    print(f"  card: L={i_sym} {spec.L:,.0f}, T={t_sym} {spec.T:,.0f}, "
+          f"A={spec.A:.0%}, B={spec.B:.0%}, {spec.rounds} rounds, K={spec.K}")
     t0 = time.time()
     sol = solve_v2(spec, print_progress=True)
     print(f"  solved in {time.time() - t0:.0f}s")
-    print(f"  E[final wealth] = GBP {sol.value:,.1f}   "
+    print(f"  E[final wealth] = {i_sym} {sol.value:,.1f}   "
           f"expected P/L = {sol.pl() * 100:+.3f}%")
  
     print("\n[4] Gates 3 and 4: Monte Carlo replay through the shared rules")

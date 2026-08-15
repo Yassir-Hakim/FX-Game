@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 A0_DEFAULT = 1.25
 sd_DEFAULT = 0.05
-BDC_FEE_DEFAULT = 0.02
+BDC_FEE_DEFAULT = 0.1
 
 
 @dataclass

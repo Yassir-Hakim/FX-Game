@@ -76,12 +76,12 @@ class TraderSpec:
     terminal_mode    "pounds" is the official P/L; "dollars" is gate 1's
                      objective (maximise expected dollars, exactly v1's).    
     """
-    L: float = 100_000.0
-    T: float = 125_000.0
+    L: float = 100000.0
+    T: float = 125000.0
     A: float = 0.02
     B: float = 0.03
     rounds: int = 4
-    K: int = 3
+    K: int = 1
     params: GameParams = field(default_factory=GameParams)
     all_or_nothing: bool = False
     terminal_mode: str = "pounds"
@@ -326,7 +326,7 @@ def kappa(grids, a4, sd):
     hi = a4 + 8.0 * sd
     
     num, err = quad(lambda a5: norm.pdf(a5, a4, sd) / a5, lo, hi,
-                    epsabs=1e-13, epsrel=1e-13, limit=100)
+                    epsabs=1e-13, epsrel=1e-13, limit=1000)
     mass = norm.cdf(hi, a4, sd) - norm.cdf(lo, a4, sd)   # positive-support
     val = num / mass
     if not np.isfinite(val):
@@ -351,7 +351,7 @@ def terminal_matrix(spec, grids, a4):
 
     # seller: dollars convert at 1/a5, convex -> kappa by quadrature (Jensen).
     # buyer: pounds convert at a5, LINEAR -> E[a5 | a4] = a4 exactly.
-    k = kappa(grids, a4, spec.params.sd) if spec.side == "A" else a4  #
+    k = kappa(grids, a4, spec.params.sd) if spec.side == "A" else a4  
     dpart = (grids.d - spec.B * np.maximum(spec.T - grids.d, 0.0)) * k
     cpart = grids.c * (1.0 - spec.A)
     # combine into a full (pounds x dollars) table
@@ -950,19 +950,21 @@ def plot_game(trace, save_path=None, ax_rate=None, ax_inv=None, title=None):
  
 def _pick_representative_game(sol, res):
     """From replay draws `res`, pick a multi-round game near the median outcome
-    (so the drawn path shows the strategy at work, not an instant round-1
-    clear)."""
-    med = np.median(res["W"])
-    best = None
-    for i in range(len(res["W"])):
-        tr = play_game(sol, path=res["X"][i], a5=res["a5"][i])
-        if tr["rounds"][0]["c"] > 1 and \
-                sum(1 for r in tr["rounds"] if r["offers"]) >= 2:
-            s = abs(tr["W"] - med)
-            if best is None or s < best[0]:
-                best = (s, tr)
-    if best is not None:
-        return best[1]
+    (so the drawn path shows the strategy at work"""
+    
+    mid = int(np.argsort(res["W"])[len(res["W"]) // 2])
+    return play_game(sol, path=res["X"][mid], a5=res["a5"][mid])
+
+def _pick_representative_game(sol, res):
+    """From replay draws `res`, pick the game whose outcome is the MEDIAN of
+    the Monte Carlo set. P/L is monotone in W, so the median-W path IS the
+    median-P/L path: the printed example is typical BY CONSTRUCTION.
+
+    The previous picker filtered to games that carried inventory past round 1
+    with offers in 2+ rounds. Where the optimum front-loads (side A), almost
+    no path passes that filter, so it kept only extreme-tail paths and
+    GUARANTEED a catastrophic-looking example. It also replayed every path to
+    choose one; this replays exactly one."""
     mid = int(np.argsort(res["W"])[len(res["W"]) // 2])
     return play_game(sol, path=res["X"][mid], a5=res["a5"][mid])
  
@@ -1126,8 +1128,7 @@ def bdc_baseline(spec, grids=None):
         d = spec.L * bdc_payoff_per_unit(a1, p.bdc_fee, spec.side)
         payoff = d - spec.B * max(spec.T - d, 0.0)
         # buyer settles LINEARLY, and the walk is a martingale: E[a5 | a1] = a1
-        EW += w * payoff * (kappa(grids, a1, sd_to_settlement)
-                            if spec.side == "A" else a1)
+        EW += w * payoff * (kappa(grids, a1, sd_to_settlement) if spec.side == "A" else a1) 
     return EW, (EW - spec.L) / spec.L
 # ==============================================================================
 # 9. VALIDATION
@@ -1183,6 +1184,10 @@ def gate3_and_4(sol, n_paths=20_000, seed=1, print_progress=True):
         print(f"  money conservation: worst {i_sym} error "
               f"{res['pound_err']:.2e}, worst {t_sym} error "
               f"{res['dollar_err']:.2e}")
+        L0 = sol.spec.L
+        print(f"  in P/L terms: table {(sol.value/L0-1)*100:+.4f}%   "
+              f"MC {(mc/L0-1)*100:+.4f}% +/- {2*se/L0*100:.4f}   "
+              f"gap {gap/L0*100:+.4f}%  ({gap/se:+.1f} s.e.)")
     assert abs(gap) < tol, f"gate 3 FAILED: gap {gap:+.1f} vs tol {tol:.1f}"
     assert res["pound_err"] < 1e-6 * sol.spec.L, "gate 4 FAILED (pounds)"
     assert res["dollar_err"] < 1e-6 * sol.spec.L, "gate 4 FAILED (dollars)"
@@ -1386,6 +1391,8 @@ if __name__ == "__main__":
     print("\n[4] Gates 3 and 4: Monte Carlo replay through the shared rules")
     res = gate3_and_4(sol, n_paths=20_000, seed=1)
     print("  gates 3 and 4 PASSED")
+    ###res = gate3_and_4(sol, n_paths=200_000, seed=1)
+    ###print("gates 3 and 4 PASSED (200K)")
  
     print("\n[5] Gate 5: the DP is bracketed by the floor and the ceiling")
     gate5_brackets(sol, res)
@@ -1399,8 +1406,7 @@ if __name__ == "__main__":
  
     # ---- THE MAIN OUTPUT: the optimal strategy, drawn as the path it follows -
     print("\n" + "=" * 74)
-    print("[7] THE OPTIMAL STRATEGY for this trader (the path the optimum "
-          "follows)")
+    print("[7] (median-outcome path -- a typical game)")
     print("=" * 74)
     # reuse the already-solved `sol` and replay draws `res` (avoids re-solving).
     _trace = _pick_representative_game(sol, res)
@@ -1409,3 +1415,22 @@ if __name__ == "__main__":
     plot_game(_trace, save_path="optimal_strategy.png",
               title=f"Optimal strategy  |  P/L = {_trace['pl']*100:+.2f}%  "
                     f"(L={spec.L:,.0f}, T={spec.T:,.0f})")
+
+    # ---- [8] THE SET PATH: one fixed scenario, every run ---------------------
+    # The same path is hard-coded in rl_diagnostics.py, so this figure and the
+    # RL arms' set_path.png show different policies on the IDENTICAL game --
+    # directly comparable across files, runs and days.
+    SET_PATH = [1.30, 1.36, 1.37, 1.41, 1.33]    # X1..XR, then a_end
+    print("\n" + "=" * 74)
+    print("[8] THE SET PATH  (fixed across runs: a0 "
+          f"{spec.params.a0} -> "
+          + " -> ".join(f"{v:.2f}" for v in SET_PATH) + ")")
+    print("=" * 74)
+    xs = SET_PATH[:-1][:spec.rounds]
+    xs += [xs[-1]] * (spec.rounds - len(xs))     # shorter ladders: hold last
+    _tr = play_game(sol, path=xs, a5=SET_PATH[-1])
+    print()
+    print_game_trace(_tr)
+    plot_game(_tr, save_path="set_path_dp.png",
+              title=f"DP on the set path  |  P/L = {_tr['pl']*100:+.2f}%")
+    print("  wrote set_path_dp.png")

@@ -51,7 +51,7 @@ class TraderSpec:
     the capital the Monte Carlo happens to play with -- which cancels out of
     every per-unit number and only sets the scale of the simulation.
     """
-    side: str = "A"       # "A": starts in pounds, wants dollars (the T1 family)
+    side: str = "B"       # "A": starts in pounds, wants dollars (the T1 family)
                           # "B": starts in dollars, wants pounds (the T4 family)
     capital: float = 50_000.0
     params: GameParams = field(default_factory=GameParams)
@@ -194,13 +194,32 @@ def h(offer_rate, a0=A0_DEFAULT, sd=sd_DEFAULT, f=BDC_FEE_DEFAULT, side="A"):
     return (1 - norm.cdf(z)) - f * (offer_rate / sd) * norm.pdf(z)
 
 
-def closed_form_optimal_rate(a0=A0_DEFAULT, sd=sd_DEFAULT, f=BDC_FEE_DEFAULT,
-                             side="A"):
-    """Solves h(P)=0 for P* via bisection (brentq), searching between a0 and a0+8σ.
-    The seller shades its ask UP from the anchor; the buyer shades its bid DOWN,"""
-    if side == "B":
-        return brentq(lambda P: h(P, a0, sd, f, side), a0 - 8 * sd, a0)
-    return brentq(lambda P: h(P, a0, sd, f), a0, a0 + 8 * sd)
+def closed_form_optimal_rate(
+    a0=A0_DEFAULT,
+    sd=sd_DEFAULT,
+    f=BDC_FEE_DEFAULT,
+    side="A",
+):
+    """Return the optimal quote within the positive ±8σ range."""
+    if not 0.0 <= f <= 1.0:
+        raise ValueError("bdc_fee must be between 0 and 1")
+
+    lo = max(1e-9, a0 - 8.0 * sd)
+    hi = a0 + 8.0 * sd
+    fn = lambda P: h(P, a0, sd, f, side)
+
+    hlo, hhi = fn(lo), fn(hi)
+
+    # Interior optimum
+    if hlo * hhi < 0.0:
+        return brentq(fn, lo, hi)
+
+    # With very small/zero fees, there may be no finite root.
+    # In that case the optimum is one of the no-trade boundaries.
+    return max(
+        (lo, hi),
+        key=lambda P: expected_target_per_unit(P, a0, sd, f, side),
+    )
 
 
 def expected_target_per_unit(P, a0=A0_DEFAULT, sd=sd_DEFAULT, f=BDC_FEE_DEFAULT,

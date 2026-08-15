@@ -1,0 +1,48 @@
+==============================================================================
+ SUMMARY  |  side A, rounds 1, K 1, 20,000 paired paths
+==============================================================================
+ game (from rl_env): L 100,000 GBP, target 125,000, holding fee 2%, shortfall 3%
+ market: a0 1.25, sd 0.05, BdC fee 2%
+
+MEAN P/L  (levels are floor-anchored: analytic always-BdC floor +
+the paired difference below. Raw 20k MC means carry ~+/-0.11% and can
+even land below the floor by chance; they are not shown.)
+  PPO                          -1.9282% +/- 0.0000%   (-1,928 +/- 0 GBP)
+  DP optimum (replayed)        -1.9004% +/- 0.0062%   (-1,900 +/- 6 GBP)
+  always-BdC                   -1.9282%  (analytic, exact)
+
+  paired differences (common random numbers -- the only way the signal clears the noise):
+  PPO - always-BdC             +0.0000% +/- 0.0000%   (+0 +/- 0 GBP)
+  DP - always-BdC (prize)      +0.0278% +/- 0.0062%   (+28 +/- 6 GBP)
+  DP - PPO (regret)            +0.0278% +/- 0.0062%   (+28 +/- 6 GBP)
+
+  DP table value -1.8548% -- inflated by the maximisation bias that
+  compounds through backward induction. The replayed value above is the quotable one.
+
+THE FIRST OFFER  (round 1's observation is fixed, so a deterministic
+policy makes the SAME opening offer in every single game)
+  PPO          NO FILLABLE OFFER -- size ~0, or pointing at the empty pocket.
+               This is a silent no-op, not a strategy: check the action mapping.
+  DP optimum   quote 1.3167 $/GBP  (z = +1.33 sd)  size 100.0% of the book
+               fill probability 9.1%
+  v0 one-shot  |z*| = 1.44 sd  (the closed form, no continuation value)
+
+OFFERS BY ROUND  (over the paths; 'shown' = a fillable offer was made)
+  round  shown%    z (sd)    size   fill%  BdC (signed)
+      1     0.0        --      --      --        +1.000
+  [FLAG] the policy never made a fillable offer on any path. Its P/L is
+         the always-BdC baseline by construction, and the action mapping,
+         not the game, is what that measures.
+
+  DP fresh-book quote by round (full book, anchor a0):
+    round 1: 1.3167 $/GBP  (z = +1.33 sd)
+
+THE SET PATH  (fixed across runs; see set_path.png)
+  PPO on the set path:
+    r1  a=1.25 X=1.30   no offer;   BdC moves 100,000
+    settle a_end=1.33   P/L -4.211%
+  DP on the set path:
+    r1  a=1.25 X=1.30   offer 1.3167 on 100,000 (rejected);   BdC moves 100,000
+    settle a_end=1.33   P/L -4.211%
+
+FILES: representative_path.png, learning_curve.png, pl_hist.png, summary.txt

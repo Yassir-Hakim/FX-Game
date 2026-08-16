@@ -3,6 +3,7 @@
 ==============================================================================
  game (from rl_env): L 100,000 GBP, target 125,000, holding fee 2%, shortfall 3%
  market: a0 1.25, sd 0.05, BdC fee 2%
+ provenance: path seed 123, 20,000 paths, written 2026-08-16 17:39
 
 MEAN P/L  (levels are floor-anchored: analytic always-BdC floor +
 the paired difference below. Raw 20k MC means carry ~+/-0.11% and can
@@ -45,4 +46,4 @@ THE SET PATH  (fixed across runs; see set_path.png)
     r1  a=1.25 X=1.30   offer 1.3167 on 100,000 (rejected);   BdC moves 100,000
     settle a_end=1.33   P/L -4.211%
 
-FILES: representative_path.png, learning_curve.png, pl_hist.png, summary.txt
+FILES: representative_path.png, set_path.png, pl_hist.png, learning_curve.png, summary.txt

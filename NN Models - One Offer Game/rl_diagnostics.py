@@ -4,9 +4,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 """
 ================================================================================
- rl_diagnostics.py -- shared ground truth and the four outputs
+ rl_diagnostics.py -- shared ground truth and the five outputs
 ================================================================================
- Imported by rl_train_ppo.py (SB3) and rl_train_torch.py (hand-rolled). Every
+ Imported by PPO_train.py (SB3) and torch_train.py (hand-rolled). Every
  function takes SPEC as an argument: the torch arm climbs a rounds ladder, so
  the game cannot be a module-level constant here. Only main() -- the PPO
  report at the bottom -- defaults to the env's own spec.
@@ -39,7 +39,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
                    so this file is a dependency of training, not just of
                    reporting. gate_dump_all checks it against the env.
 
- SB3 is imported inside _load_ppo, so the torch arm needs no stable-baselines3.
+ No stable-baselines3 anywhere in this file: it measures policies, it does not
+ load or train them. PPO's re-report entry point lives in PPO_train.py, so the
+ dependency runs one way only (trainers -> diagnostics).
 
  K = 1 only: with one offer per round the belief bracket is always fresh at
  the offer step, so the DP's greedy action needs no bracket-index translation
@@ -47,12 +49,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 ================================================================================
 """
 
-# ======================= SETTINGS (THE PPO REPORT ONLY) =======================
-# These configure main(). The library functions take their arguments from the
+# ============================== SETTINGS ======================================
+# Defaults for report(); the library functions take their arguments from the
 # caller and read nothing here.
 N_PATHS     = 20_000      # paired Monte Carlo paths
 SEED        = 123         # path draws only (every policy shares the paths)
-MODEL_NAME  = "ppo_game"  # the zip rl_train_ppo.py wrote
+GATE_EPISODES = 500       # episodes recorded from the replay report() already
+                          # runs, so gate_terminal_wealth costs nothing extra
 SET_PATH    = [1.30, 1.36, 1.37, 1.41, 1.33]
                           # the comparison path: the first `rounds` entries
                           # are the reveals X1..XR, the LAST entry is the
@@ -60,11 +63,10 @@ SET_PATH    = [1.30, 1.36, 1.37, 1.41, 1.33]
                           # fewer rounds, the middle is dropped and the same
                           # settlement kept, so every rung of the ladder is
                           # judged on the same scenario.
-CURVE_DATA  = "episode_pl.npy"   # the training log rl_train_ppo.py saved
 # ==============================================================================
 
-import sys
-from pathlib import Path
+from datetime import datetime
+
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -306,41 +308,6 @@ def run_paths(spec, policy, X, a_end, label="policy", record=False,
                                dump=dump)
 
 
-def observed_rate_scale(spec, n_episodes=64, seed=90_001):
-    """Estimate the rate scale from what the AGENT CAN SEE, and nothing else.
-
-    Plays n_episodes with a null action (price 1, size 0 -- a no-op both
-    phases; the rate path does not depend on actions anyway) and reads only
-    the observation vector: the opening anchor (slot 5) and the revealed rate
-    at BdC steps (slots 6 == 7). Within an episode, successive reveals differ
-    by one innovation, so their increments estimate sd directly. The terminal
-    observation zeroes slots 6/7 and is skipped.
-
-    This is the trainers' distribution knowledge, in full: both arms derive
-    every rate-scaled constant (exploration sigma, smoothing tau) from the
-    numbers returned here, times dimensionless settings. Disclosure for any
-    write-up: the pre-pass costs n_episodes of environment interaction, and
-    the estimate lands within ~sd/sqrt(2 * 4 * n_episodes) of the truth
-    (~4% at the default 64).
-
-    Returns (sd_hat, a0_hat, n_increments)."""
-    env = Game(spec)
-    null = np.array([1.0, 0.0], dtype=np.float32)
-    incs, a0s = [], []
-    for i in range(n_episodes):
-        obs, _ = env.reset(seed=seed + i)
-        a0s.append(float(obs[5]))
-        last, done = float(obs[5]), False
-        while not done:
-            obs, _, done, _, _ = env.step(null)
-            if done:
-                break                            # terminal obs zeroes 6/7
-            if obs[6] == obs[7]:                 # BdC step: X revealed
-                incs.append(float(obs[6]) - last)
-                last = float(obs[6])
-    return (float(np.std(incs, ddof=1)), float(np.mean(a0s)), len(incs))
-
-
 def first_offer(spec, policy):
     """The opening offer, read once. At round 1 the observation is fixed --
     full book, nothing banked, anchor a0 -- so a DETERMINISTIC policy makes
@@ -571,7 +538,8 @@ def _pm(x):
 
 def write_summary(save_path, spec, pl, dump_pl, rep, bdc_pl, dp_pl=None,
                   stats=None, learner_offer=None, dp_offer=None,
-                  dp_offers=None, label="learner", extra=()):
+                  dp_offers=None, label="learner", extra=(), seed=None,
+                  files=None):
     """The text output. pl and dump_pl must be PAIRED -- the same paths in the
     same order -- or the differences below are meaningless."""
     pl, dump_pl = np.asarray(pl, float), np.asarray(dump_pl, float)
@@ -592,6 +560,11 @@ def write_summary(save_path, spec, pl, dump_pl, rep, bdc_pl, dp_pl=None,
     w(f" game (from rl_env): L {spec.L:,.0f} {sym}, target {spec.T:,.0f}, "
       f"holding fee {spec.A:.0%}, shortfall {spec.B:.0%}")
     w(f" market: a0 {a0}, sd {sd}, BdC fee {spec.params.bdc_fee:.0%}")
+    # PROVENANCE -- so a summary file identifies its own run. Two summaries are
+    # only comparable if the path seed and count match; without this line you
+    # cannot tell a re-run from a stale copy.
+    w(f" provenance: path seed {seed if seed is not None else 'UNRECORDED'}, "
+      f"{len(pl):,} paths, written {datetime.now():%Y-%m-%d %H:%M}")
 
     w("\nMEAN P/L  (levels are floor-anchored: analytic always-BdC floor +")
     w("the paired difference below. Raw 20k MC means carry ~+/-0.11% and can")
@@ -663,7 +636,7 @@ def write_summary(save_path, spec, pl, dump_pl, rep, bdc_pl, dp_pl=None,
                   f"{q:.4f} $/GBP  (z = {(q - a0) / sd * _greed(spec):+.2f} sd)"))
     for line in extra:
         w(line)
-    w("\nFILES: " + ", ".join((PATH_PNG, CURVE_PNG, HIST_PNG, SUMMARY)))
+    w("\nFILES: " + ", ".join(files if files else (SUMMARY,)))
     text = "\n".join(L) + "\n"
     Path(save_path).write_text(text)
     return text
@@ -708,7 +681,12 @@ def report(spec, policy, out_dir, label="learner", curve=None, sol=None,
 
     print(f"replaying {label} and the DP on the SAME {n_paths:,} paths")
     X, a_end = draw_paths(spec, n_paths, seed)
-    _, _, pl, stats = run_paths(spec, policy, X, a_end, label)
+    # record the first GATE_EPISODES episodes of the run that happens anyway,
+    # so the terminal-wealth gate below costs no extra replay
+    _, eps, pl, stats = run_paths(spec, policy, X, a_end, label,
+                                  record=True, n_record=GATE_EPISODES)
+    if not gate_terminal_wealth(spec, eps):
+        raise SystemExit("a gate FAILED; not reporting numbers on top of it")
     _, _, dp_pl, _ = run_paths(spec, make_dp_policy(spec, sol), X, a_end, "DP")
     dump_pl = dump_all_pl(spec, X[:, 0], a_end)
     # one estimate everywhere: the summary's own paired replay supersedes the
@@ -721,6 +699,7 @@ def report(spec, policy, out_dir, label="learner", curve=None, sol=None,
 
     plot_path(out_dir / PATH_PNG, spec, sol, policy, X, a_end, pl, tag,
               label=label)
+    written = [PATH_PNG]
     extra = list(extra)
     Xs, aes = set_path_arrays(spec)
     if Xs is not None:
@@ -729,45 +708,26 @@ def report(spec, policy, out_dir, label="learner", curve=None, sol=None,
                   note="the set path (fixed across runs): a0 "
                        f"{spec.params.a0} -> "
                        + " -> ".join(f"{v:.2f}" for v in SET_PATH))
+        written.append(SET_PNG)
         extra += ["\nTHE SET PATH  (fixed across runs; see set_path.png)",
                   trace_on_set_path(spec, policy, label),
                   trace_on_set_path(spec, make_dp_policy(spec, sol), "DP")]
     plot_pl_hist(out_dir / HIST_PNG, pl, rep["replay"], bdc_pl, tag,
                  label=label)
+    written.append(HIST_PNG)
     if curve is not None:
         xs, ys, xlabel = curve
         plot_learning_curve(out_dir / CURVE_PNG, xs, ys, rep["replay"],
                             bdc_pl, xlabel, tag)
+        written.append(CURVE_PNG)
+    written.append(SUMMARY)
     text = write_summary(out_dir / SUMMARY, spec, pl, dump_pl, rep, bdc_pl,
                          dp_pl=dp_pl, stats=stats,
                          learner_offer=first_offer(spec, policy),
                          dp_offer=first_offer(spec, make_dp_policy(spec, sol)),
-                         dp_offers=dp_offers, label=label, extra=extra)
+                         dp_offers=dp_offers, label=label, extra=extra,
+                         seed=seed, files=written)
     if echo:
         print("\n" + text)
-    print(f"four outputs in {out_dir}/")
+    print(f"five outputs in {out_dir}/")
     return text
-
-
-def _load_ppo(path):
-    from stable_baselines3 import PPO       # local: the torch arm needs no SB3
-    return PPO.load(path)
-
-
-def main():
-    """Re-report an already trained PPO policy without retraining."""
-    from v0_PPO_train import run_dir, wrap_action
-    spec = Game().spec                # the env's own card; never chosen here
-    out = run_dir(spec)
-    model = _load_ppo(out / MODEL_NAME)
-    pol = lambda obs, env: wrap_action(
-        spec, model.predict(obs, deterministic=True)[0], env)
-    curve = None
-    if (out / CURVE_DATA).exists():
-        ys = np.load(out / CURVE_DATA)
-        curve = (np.arange(1, len(ys) + 1), ys, "training episode")
-    report(spec, pol, results_path(out.name), label="PPO", curve=curve)
-
-
-if __name__ == "__main__":
-    main()

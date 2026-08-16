@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 """
-rl_train_ppo.py -- SB3 PPO on the certified environment (rl_env.Game).
+PPO_train.py -- SB3 PPO on the certified environment (rl_env.Game).
 
 A TRADER WITH NO PRIOR KNOWLEDGE. This arm represents someone sitting down to
 play the game knowing only the rules, so it is held to a strict standard: no
@@ -23,7 +23,8 @@ GAMMA          = 1.0       # scored once, at settlement
 N_EVALS        = 20        # points on the learning curve
 EVAL_EPISODES  = 2_000     # per evaluation (unpaired -- see the header)
 REPORT         = True      # the paired replay + the five outputs
-MODEL_NAME     = "ppo_game"        # the name rl_diagnostics expects
+REPORT_ONLY    = False     # skip training: load the saved model and re-report
+MODEL_NAME     = "ppo_game"        # the saved zip, read back by REPORT_ONLY
 # ==============================================================================
 
 from pathlib import Path
@@ -40,17 +41,27 @@ import rl_diagnostics as D
 
 
 def run_dir(spec):
-    """The run folder, named from the card. rl_diagnostics.main() imports this
-    to find the saved model, so both entry points agree by construction."""
-    fee_bp = round(spec.params.bdc_fee * 10_000)
+    """The run folder, named from the card. Both entry points below (train,
+    and REPORT_ONLY re-report) go through this, so they agree by construction."""
     return results_path(f"ppo_{spec.side}_R{spec.rounds}")
 
 
-def wrap_action(spec, u, env):
-    """Identity. PPO acts directly in the env's own action space, so there is
-    nothing to translate -- kept only because rl_diagnostics.main() imports it
-    to rebuild the policy when re-reporting without retraining."""
-    return np.asarray(u, dtype=np.float32)
+def ppo_policy(model):
+    """The trained model as an env-side policy. PPO acts directly in the env's
+    own action space, so there is nothing to translate -- but routing both the
+    training report and the re-report through one constructor means they cannot
+    silently diverge."""
+    return lambda obs, env: model.predict(obs, deterministic=True)[0]
+
+
+def load_curve(out):
+    """SB3's EvalCallback log -> the learning curve, or None if absent.
+    results is (n_evals, n_eval_episodes); average across episodes."""
+    ev_path = out / "evaluations.npz"
+    if not ev_path.exists():
+        return None
+    ev = np.load(ev_path)
+    return ev["timesteps"], ev["results"].mean(axis=1), "timestep"
 
 
 def make_env():
@@ -62,6 +73,17 @@ def main():
     spec = Game().spec                       # read, never chosen here
     OUT = run_dir(spec)
     OUT.mkdir(parents=True, exist_ok=True)
+
+    if REPORT_ONLY:
+        # Re-report an already trained policy without retraining. Lives here,
+        # not in rl_diagnostics, so that SB3 and the model-loading stay on the
+        # trainer side and the dependency runs one way (trainers -> diagnostics).
+        model = PPO.load(OUT / MODEL_NAME)
+        print(f"re-reporting {OUT / MODEL_NAME} -- no training")
+        D.report(spec, ppo_policy(model), OUT, label="PPO",
+                 curve=load_curve(OUT))
+        return
+
     max_steps = spec.rounds * (spec.K + 1)
     total_timesteps = TOTAL_EPISODES * max_steps
 
@@ -69,8 +91,7 @@ def main():
           f"K {spec.K}, fee {spec.params.bdc_fee:.2%}")
     print(f"  budget {TOTAL_EPISODES:,} episodes x <= {max_steps} steps = "
           f"{total_timesteps:,} timesteps")
-    print("  stock PPO on the certified env: no wrappers, no tuning, no "
-          "distribution knowledge")
+    print("  stock PPO on the certified env: no distribution knowledge")
 
     train_env = make_vec_env(make_env, n_envs=N_ENVS, seed=SEED)
     eval_env = make_vec_env(make_env, n_envs=1, seed=SEED + 999)
@@ -89,14 +110,14 @@ def main():
                 callback=[eval_cb, ckpt_cb], progress_bar=True)
     model.save(OUT / MODEL_NAME)
 
-    ev = np.load(OUT / "evaluations.npz")
-    xs, ys = ev["timesteps"], ev["results"].mean(axis=1)
-    print(f"  eval curve {ys[0] * 100:+.3f}% -> {ys[-1] * 100:+.3f}% "
-          f"(unpaired, +/-~1% -- shape only)")
+    curve = load_curve(OUT)
+    if curve is not None:
+        ys = curve[1]
+        print(f"  eval curve {ys[0] * 100:+.3f}% -> {ys[-1] * 100:+.3f}% "
+              f"(unpaired, +/-~1% -- shape only)")
 
     if REPORT:
-        pol = lambda obs, env: model.predict(obs, deterministic=True)[0]
-        D.report(spec, pol, OUT, label="PPO", curve=(xs, ys, "timestep"))
+        D.report(spec, ppo_policy(model), OUT, label="PPO", curve=curve)
 
 
 if __name__ == "__main__":

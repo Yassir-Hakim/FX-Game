@@ -2,34 +2,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-"""
-v0_sigma_sweep.py -- Avi's experiment: how the one-shot optimal offer moves
-                     with the rate volatility sigma.
 
-Everything is the v0 closed form imported from v0_game -- nothing re-derived
-here, nothing cached; every run solves fresh. Units come from fx_mechanics,
-so each side is drawn the way its own trader would quote it: side A in
-$/GBP, side B in GBP/$.
-
-WHAT IT SHOWS: the optimal offer has TWO REGIMES either side of a critical
-volatility sigma_c.
-  * sigma > sigma_c  FISHING: quote away from the anchor in the greedy
-                     direction, hoping the hidden rate ran the trader's way.
-                     Fills are rare and rich.
-  * sigma < sigma_c  FEE-DODGING: quote on the OTHER side of the anchor. The
-                     hidden rate is nearly known, so an offer a touch worse
-                     than fair value fills almost surely and beats paying the
-                     Bureau's fee. The market maker stops mattering and the
-                     offer's only job is avoiding the fee.
-The crossing is exact: h(a0) = 0 gives 1/2 = f*a0/(sigma*sqrt(2*pi)), so
-        sigma_c = sqrt(2/pi) * f * a0,
-printed below for three fees and both sides.
-
-A caution the plot respects: where the offer channel is DOMINATED there is no
-interior optimum at all, and the finder correctly returns a bracket edge.
-Drawing that edge would put a bracket setting on the page as though it were
-economics, so those points are left off the line.
-"""
 
 import numpy as np
 import matplotlib
@@ -38,7 +11,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm
 from scipy.optimize import brentq
 
-from v0_game import (closed_form_optimal_rate, expected_target_per_unit, h,
+from DP_Models.v0_game import (closed_form_optimal_rate, expected_target_per_unit, h,
                      A0_DEFAULT, BDC_FEE_DEFAULT)
 # the trader's own units: side A quotes $/GBP, side B quotes GBP/$ (= 1/P)
 from Mechanics.fx_mechanics import trade_rate, rate_units, results_path

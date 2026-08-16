@@ -2,10 +2,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 """
-WHAT THIS IS, HONESTLY
   Direct policy optimisation through a differentiable simulator: pathwise
-  gradients through the game's rules and the hidden rate. Neural stochastic control, NOT
-  model-free RL . The model-free comparison lives in rl_train_ppo.py.
+  gradients through the game's rules and the hidden rate. Neural stochastic control.
 
 MEASUREMENT (project standard, not learner features)
   Check 1 aborts the run unless this file's game equals the certified
@@ -14,12 +12,7 @@ MEASUREMENT (project standard, not learner features)
   through that certified env via rl_diagnostics.report() (five outputs,
   floor-anchored values). The learner is told nothing by either.
 
-DISTRIBUTION KNOWLEDGE: none. No setting encodes a0 or sd. TAU is a
-multiple of the innovation scale MEASURED from each batch's own revealed
-rates, so it rescales itself if the game's sd changes -- and it costs no
-knowledge, since the pathwise gradient already has those rates in its
-graph. The game itself -- side, rounds, K, the card -- is read from
-rl_env.Game().spec and never chosen here.
+DISTRIBUTION KNOWLEDGE: none. No setting encodes a0 or sd.
 """
 
 import math
@@ -36,8 +29,7 @@ from Mechanics.fx_mechanics import results_path
 # ============================ SETTINGS ======================================
 GATE = "smoothed"     # "smoothed": annealed sigmoid (the recipe, made to
                       #             work on a jumping payoff)
-                      # "hard":     Avi's words literally; autodiff through
-                      #             the indicator (biased -- kept to show it)
+                      # "hard":     hard MM acceptance for training
 ITERS = 2000          # training iterations, one fresh Monte Carlo batch each
 BATCH = 1000          # paths per iteration -- "a 1000 samples of the noise"
 LR = 1e-3             # AdamW, with the repository's plateau decay on top

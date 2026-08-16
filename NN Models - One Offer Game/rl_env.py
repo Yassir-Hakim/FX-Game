@@ -5,22 +5,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 """
 ================================================================================
- oneguess_env.py  --  the trading game as a Gymnasium environment
+ rl_env.py  --  the trading game as a Gymnasium environment
 ================================================================================
 
  n trading rounds, K sequential sized offers per round, a Bureau de Change
  choice each round once the rate is revealed, settlement at the round-(n+1)
  rate with the residue and deficit penalties. rounds and K are the knobs
 
- (rules doc: penalties paid in the initial currency, deficit and surplus
- converted at the Round 5 rate with no fee, P/L as a percentage of initial
- capital). The reward is that percentage, (W - L)/L, once at termination;
- info then carries {"W", "a_end"} so wrappers and diagnostics never need env
- internals. Penalties run LIVE at the card values (T1: A=2%, B=3%; T4: A=0%,
- B=20%); they are the only reason to trade on a martingale rate, so WHEN to
- liquidate is part of what is learned, not something the env pins.
-
- --- Conventions (the trap in this codebase) ----------------------------------
+ --- Conventions ---------------------------------------------------------------
    spec.side   WHO the trader is: "A" starts pounds / targets dollars,
                "B" starts dollars / targets pounds. Does NOT restrict
                which way a trade may run.
@@ -34,16 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
                reordering, and skipping it is silent on A and wrong by a
                factor of a_end^2 on B.
 
- Two-way trading is available
-
- --- The MDP ------------------------------------------------------------------
+ -------0-------------------------------------------------------------------
  One episode = one game, rounds*(K+1) steps: K offer-steps (X hidden), one
- BdC-step (X revealed). Reward zero until settlement. X is drawn ONCE per
- round and reused across its K offers; the revealed rate becomes the next
- anchor. A zero-size offer still returns the accept/reject bit, which the
- DP's explicit stop action would forgo -- identical at K = 1, a free crumb of
- information at K > 1 (see G3's replay, which absorbs it without measurable
- effect).
+ BdC-step (X revealed). 
 
  Observation (8 floats), all continuous, absolute units, no model parameters:
      0  rounds_left / rounds          (time left across rounds)
@@ -141,15 +126,9 @@ class Game(gym.Env):
         signed_frac  the raw action slot, in [-1, +1]: SIGN picks the trade
                      direction, |magnitude| is the fraction of the relevant
                      holding to sell.
-        q            the resulting AMOUNT of the sold currency -- the DP's
-                     letters for the same quantities are q at an offer and m
-                     at a BdC dump. At an offer q is only SHOWN: it moves if
-                     the MM fills and is forgotten if it does not. A BdC dump
-                     always executes, so there m offered and m traded agree.
-                     Never `w`, which is wealth throughout this project.
+        q            the resulting AMOUNT of the sold currency  
 
-        Direction "A" sells pounds, "B" sells dollars: fx_mechanics' labels,
-        so the rules can be called straight through."""
+        Direction "A" sells pounds, "B" sells dollars."""
         if signed_frac >= 0.0:
             return "A", signed_frac * self.c
         return "B", (-signed_frac) * self.d

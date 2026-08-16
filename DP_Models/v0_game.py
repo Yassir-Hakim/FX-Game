@@ -11,15 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 Structure of this file:
   0. THE TRADER        - TraderSpec: the one place to change who is playing
   1. GAME MODEL        - the objects that play out one round of the game
-  2. CLOSED FORM       - the exact maths (derived by hand), solved with a
-                         bisection search
+  2. CLOSED FORM       - the exact maths, solved with a bisection search
   3. MONTE CARLO       - simulate many games and average, as an independent
                          check on the closed form
   4. PLOT              - visualise expected payoff vs offer rate
-
- The MM's accept/reject rule and the BdC fee are NOT defined in this file: they
- live in fx_mechanics.py and are imported, so v0 and v1 provably play the same
- game. See fx_mechanics.py for why.
 ================================================================================
 """
 
@@ -50,14 +45,7 @@ from Mechanics.fx_mechanics import (
 
 @dataclass
 class TraderSpec:
-    """The one place to change who is playing -- v2's TraderSpec, cut down.
 
-    v0 is a PER-UNIT model: one round, one all-or-nothing offer, no target and
-    no penalties. So the fields v2 needs for its terminal layer (L, T, A, B)
-    have nothing to act on here, and what remains is the side, the market, and
-    the capital the Monte Carlo happens to play with -- which cancels out of
-    every per-unit number and only sets the scale of the simulation.
-    """
     side: str = "A"       # "A": starts in pounds, wants dollars (the T1 family)
                           # "B": starts in dollars, wants pounds (the T4 family)
     capital: float = 50_000.0
@@ -65,7 +53,7 @@ class TraderSpec:
 
 
 def solve_v0(spec=None):
-    """The whole of v0 for one spec: the best offer, and what it is worth."""
+    #The whole of v0 for one spec: the best offer, and what it is worth.
     spec = spec or TraderSpec()
     p = spec.params
     quote = closed_form_optimal_rate(p.a0, p.sd, p.bdc_fee, spec.side)
@@ -79,10 +67,9 @@ def solve_v0(spec=None):
 # ==============================================================================
 
 class Trader:
-    """The liquidator: holds one currency, wants all of it in the other.
+    #Holds one currency, wants all of it in the other.
+    #side "A" holds pounds and banks dollars, side "B" holds dollars and banks pounds.
 
-    side "A" holds pounds and banks dollars, side "B" holds dollars and banks pounds.
-    """
 
     def __init__(self, held: float, banked: float = 0.0, side: str = "A"):
         self.held = held
@@ -116,8 +103,6 @@ class MarketMaker:
 
     def accepts_trade(self, offer_rate: float, true_rate: float,
                       side: str = "A") -> bool:
-        """The trader offers; the MM decides. Delegates to the shared rule so
-        v0 and v1 can never disagree about when a trade is accepted."""
         return mm_accepts(offer_rate, true_rate, side)
 
     def complete_trade(self, trader: Trader, spent: float, paid: float):
@@ -207,7 +192,7 @@ def closed_form_optimal_rate(
     f=BDC_FEE_DEFAULT,
     side="A",
 ):
-    """Return the optimal quote within the positive ±8σ range."""
+    # Return the optimal quote within the positive ±8σ range.
     if not 0.0 <= f <= 1.0:
         raise ValueError("bdc_fee must be between 0 and 1")
 
@@ -236,9 +221,7 @@ def expected_target_per_unit(P, a0=A0_DEFAULT, sd=sd_DEFAULT, f=BDC_FEE_DEFAULT,
     The buyer's counterpart is NOT a closed form. It receives 1/P per dollar if
     taken (probability Phi(z)) and (1-f)/X at the BdC otherwise, and
     E[1/X ; X > P] has no elementary antiderivative -- so that branch is one
-    adaptive quadrature. Exact to machine precision, but a formula only on the
-    seller's side. This asymmetry is the same one that makes the seller's
-    settlement need kappa while the buyer's is linear."""
+    adaptive quadrature."""
     z = (P - a0) / sd
     if side == "B":
         tail, _ = quad(lambda x: norm.pdf(x, a0, sd) / x, P, a0 + 12 * sd,
@@ -251,9 +234,7 @@ def perfect_information_value(a0=A0_DEFAULT, sd=sd_DEFAULT, side="A"):
     """What one unit of initial currency is worth if the rate were KNOWN.
 
     The seller would sell at X and earn E[X] = a0; the buyer would buy at X and
-    earn E[1/X], which Jensen puts strictly above 1/a0 -- the same convexity
-    that gives the seller's settlement its kappa. The BdC-only floor is (1-f)
-    times this, so f times it is the whole prize the offers compete for.
+    earn E[1/X].
     """
     if side == "B":
         val, _ = quad(lambda x: norm.pdf(x, a0, sd) / x,
@@ -267,25 +248,9 @@ def perfect_information_value(a0=A0_DEFAULT, sd=sd_DEFAULT, side="A"):
 # 3. MONTE CARLO  (independent check via simulation)
 # ==============================================================================
 
-def estimate_average_result(offer_rate: float, n_games: int, game: OneRoundGame = None):
-    game = game or OneRoundGame()
-
-    total_banked = 0.0
-
-    for _ in range(n_games):
-        result = game.play(offer_rate)
-        total_banked += result.final_banked
-
-    return total_banked / n_games
-
-
 def monte_carlo_expected_target_per_unit(offer_rate: float, a0: float, sd: float, fee: float,
                                             n_games: int = 200_000, side: str = "A"):
-    """
-    Wraps estimate_average_result to report a per-unit value with a standard
-    error, so it can be compared apples-to-apples with the closed form.
-    Uses initial_capital=1.0 so "total banked" IS "target per unit".
-    """
+
     game = OneRoundGame(initial_rate=a0, sd=sd, initial_capital=1.0, bdc_fee=fee,
                         side=side)
 
@@ -303,7 +268,7 @@ def plot(spec=None, n_games: int = 5_000, save_path: str = "v0_plot.png"):
     spec = spec or TraderSpec()
     a0, sd, fee, side = spec.params.a0, spec.params.sd, spec.params.bdc_fee, spec.side
 
-    # the seller shades its ask UP from the anchor, the buyer its bid DOWN
+    # the seller bids UP from the anchor, the buyer its bid DOWN
     rates = (np.arange(a0 - 4 * sd, a0 + 2 * sd, 0.0025) if side == "B"
              else np.arange(a0 - 2 * sd, a0 + 4 * sd, 0.0025))
 
@@ -340,9 +305,7 @@ def plot(spec=None, n_games: int = 5_000, save_path: str = "v0_plot.png"):
     print(f"  saved plot to {out}")
 
 if __name__ == "__main__":
-    # ---- change the trader here ---------------------------------------------
     spec = TraderSpec()
-    # -------------------------------------------------------------------------
     quote, offer, g = solve_v0(spec)
     p = spec.params
     pinf = perfect_information_value(p.a0, p.sd, spec.side)

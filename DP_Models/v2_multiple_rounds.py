@@ -58,7 +58,7 @@ from Mechanics.fx_mechanics import (
     BDC_FEE_DEFAULT,
 )
 
-NO_FLOOR = -1          # sentinel floor index: "no floor learned yet"  (z = -inf)
+NO_FLOOR = -1        # sentinel floor index: "no floor learned yet"  (z = -inf)
                      # the ceiling sentinel is n_offer: "no ceiling yet" (+inf)
 
 # ==============================================================================
@@ -96,22 +96,6 @@ class TraderSpec:
 
 
 # ------------------------------------------------------------------------------
-#
-#   the REFLECTION. Prices live on a z-grid, P = a + sd z. The MM takes a
-#   seller's offer when it is BELOW the hidden rate and a buyer's when it is
-#   ABOVE, so acceptance floors the rate for one and caps it for the other --
-#   and the bracket machinery below hardcodes accept -> floor. Reading the
-#   buyer's grid DOWNWARDS, z |-> a - sd z, is the reflection Y = 2a - X: it
-#   flips the inequality while leaving the law exactly N(a, sd^2), so Phi, the
-#   quadrature and the prefix sums are inherited untouched. Working in the
-#   reciprocal rate 1/X instead would NOT do this -- 1/X is skewed, and the
-#   normal machinery would be wrong in the tails.
-#
-# Settlement is the one asymmetry that is not a mirror: the seller converts
-# dollars at 1/a5, which is convex and needs kappa = E[1/a5] (Jensen), while the
-# buyer converts pounds at a5, which is LINEAR, so the martingale gives
-# E[a5 | a4] = a4 exactly and no quadrature is needed. 
-# ------------------------------------------------------------------------------
 
 def _rate_at(spec, a, z):
     """The real rate ($/GBP) at grid coordinate z -- an offer price, or a
@@ -145,10 +129,7 @@ def _rate_at(spec, a, z):
 
 #   a        the anchor (last revealed rate) on a grid a0 +- a_halfwidth sds;
 #            continuation values are interpolated linearly in a.
-#
-# The honesty note: q, m, P and the belief brackets are all quantised. That is
-# a declared approximation, controlled by the validation gates and by rerunning
-# at finer grids (see the write-up's convergence table).
+
 
 class Grids:
     def __init__(self, spec, zmax=4.0, n_offer=49, quad_per_cell=5,
@@ -315,14 +296,6 @@ class Grids:
 # Because a5 is unknown when (c, d) are decided, the DP needs
 # kappa(a4) = E[1/a5 | a4 = a4], the expectation of 1/a5 over the settlement
 # draw a5 ~ N(a4, sd^2). Jensen (1/x convex) puts kappa(a) slightly ABOVE 1/a.
-#
-# On the choice of integrator. Everywhere ELSE the solver deliberately shares
-# one fixed, offer-aligned quadrature grid, because the belief-bracket and
-# prefix-sum machinery need the nodes aligned. kappa is the ONE expectation
-# that is only ever consumed (never fed back into that aligned grid), so it is
-# free to use the better tool: adaptive Gaussian quadrature (scipy.quad), which
-# is purpose-built for a smooth integrand against a normal density and reaches
-# machine precision, versus ~1e-6 for the shared 33-node grid. 
 
 def kappa(grids, a4, sd):
     """E[1/a5 | a4], with a5 ~ N(a4, sd^2) truncated to a5 > 0."""
@@ -964,13 +937,8 @@ def _pick_representative_game(sol, res):
 def _pick_representative_game(sol, res):
     """From replay draws `res`, pick the game whose outcome is the MEDIAN of
     the Monte Carlo set. P/L is monotone in W, so the median-W path IS the
-    median-P/L path: the printed example is typical BY CONSTRUCTION.
+    median-P/L path: the printed example is typical BY CONSTRUCTION. """
 
-    The previous picker filtered to games that carried inventory past round 1
-    with offers in 2+ rounds. Where the optimum front-loads (side A), almost
-    no path passes that filter, so it kept only extreme-tail paths and
-    GUARANTEED a catastrophic-looking example. It also replayed every path to
-    choose one; this replays exactly one."""
     mid = int(np.argsort(res["W"])[len(res["W"]) // 2])
     return play_game(sol, path=res["X"][mid], a5=res["a5"][mid])
  

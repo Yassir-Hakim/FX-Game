@@ -24,12 +24,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import random
 from dataclasses import dataclass, field
-from scipy.stats import norm      # Phi = norm.cdf, phi = norm.pdf (same as v0)
+from scipy.stats import norm      # Phi = norm.cdf, phi = norm.pdf 
 import matplotlib.pyplot as plt
 
-# The rules of the game, defined once and shared with v0. See fx_mechanics.py.
 from scipy.integrate import quad
 
+# The rules of the game, defined once and shared with v0. See fx_mechanics.py.
 from Mechanics.fx_mechanics import (
     GameParams,
     mm_accepts,
@@ -49,20 +49,12 @@ from Mechanics.fx_mechanics import (
 
 @dataclass
 class TraderSpec:
-    """The one place to change who is playing -- v2's TraderSpec, cut down.
-
-    v1 is still a PER-UNIT model, so v2's terminal fields (L, T, A, B) have
-    nothing to act on. What v1 adds over v0 is the offer budget: how many
-    sequential offers the round allows. The two grid fields are the solver's
-    discretisation rather than the trader, but they live here so that one
-    object describes a whole run.
-    """
-    side: str = "A"       # "A": starts in pounds, wants dollars (the T1 family)
-                          # "B": starts in dollars, wants pounds (the T4 family)
+    side: str = "A"       # "A": starts in pounds, wants dollars 
+                          # "B": starts in dollars, wants pounds 
     max_offers: int = 10
     params: GameParams = field(default_factory=GameParams)
-    grid_halfwidth_sds: float = 6.0
-    n_grid: int = 801
+    grid_halfwidth_sds: float = 6.0 #size of the grid Nsd each way
+    n_grid: int = 801 #density of the grid
 
 
 def solve_from_spec(spec=None):
@@ -95,8 +87,7 @@ def solve_from_spec(spec=None):
 #            E[1/X | X >= c]    = one quadrature 
 #
 #           the buyer banks 1/P per unit rather than P, so its BdC fallback is
-#           an expectation of 1/X, which has no elementary antiderivative --
-#           the same convexity that gives the seller's settlement its kappa.
+#           an expectation of 1/X, which has no elementary antiderivative
 #
 # These are written out inline in the solver where they are used.
 
@@ -112,7 +103,7 @@ class V1Solution:
     values[k][j]     V_k(bound = grid[j]) -- how well you can do from here.
                      The bound is a CEILING for the seller and a FLOOR for the
                      buyer, because a rejection tells each of them the opposite
-                     thing about the rate.
+                     thing about the rate. K is remaining offers.
 
     policy[k][j]     grid index of the best next offer when k offers remain and
                      the bound is grid[j].
@@ -137,15 +128,15 @@ class V1Solution:
         self.params = params
 
     def value(self, K):
-        """Expected target currency per unit of initial currency, with K offers, before anything happens."""
+        #Expected target currency per unit of initial currency, with K offers, before anything happens.
         return self.start_value[K]
 
     def first_offer(self, K):
-        """The best opening offer with K offers in hand."""
+        #The best opening offer with K offers in hand.
         return self.grid[self.start_index[K]]
 
     def ladder(self, K):
-        """The offers made if EVERY offer is rejected."""
+        #The offers made if EVERY offer is rejected.
         i = self.start_index[K]
         rungs = [self.grid[i]]
         for k in range(K - 1, 0, -1):     # after a rejection the bound is i
@@ -169,7 +160,7 @@ def solve_v1(params=None, max_offers=10, grid_halfwidth_sds=6.0, n_grid=801,
              side="A"):
     """Backward-induction solution of the K-sequential-offer round.
 
-    The grid covers a0 ± grid_halfwidth_sds standard deviations with n_grid
+    The grid covers a0 ± grid_halfwidth_sds with n_grid
     points. Because the objective is flat at its maximum, snapping to the
     nearest grid point barely moves the value: at K=1 the grid value matches
     v0's closed form to ~1e-8
@@ -264,8 +255,7 @@ def solve_v1(params=None, max_offers=10, grid_halfwidth_sds=6.0, n_grid=801,
 
 def monte_carlo_value(sol, K, n_games=200_000, seed=0):
     """Simulate the round exactly as a player would live it, and average the
-    result. This must agree with sol.value(K): same two-way discipline as v0
-    (one formula, one simulation).
+    result. 
     """
     if K >= len(sol.start_value):
         raise ValueError(f"K={K} exceeds solved budget (max {len(sol.start_value)-1}); "
@@ -322,9 +312,7 @@ def test_k1_matches_v0():
 
 def test_monte_carlo_matches_dp():
     """The DP value must match a simulation of its own policy, played through
-    the shared game rules. This IS the independent check for v1: a different
-    method (Monte Carlo) against a different method (backward induction), both
-    testing v1's own solution. Checks a couple of budgets within 4 std errors."""
+    the shared game rules."""
     sol = solve_v1(max_offers=10)
     for K in (1, 5, 10):
         mc, se = monte_carlo_value(sol, K, n_games=200_000, seed=1)

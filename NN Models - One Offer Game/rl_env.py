@@ -69,13 +69,13 @@ P_MIN, P_MAX = 0.0, 8.0 * A0_DEFAULT
 
 @dataclass
 class GameSpec(TraderSpec):
-    L: float = 100000.0          # starting capital, INITIAL currency
-    T: float = 125000.0          # target, TARGET currency
-    A: float = 0.02               # residue penalty on leftover initial currency
-    B: float = 0.03               # deficit penalty on the target shortfall below T
-    rounds: int = 1               # trading rounds (round n+1 = settlement draw only)
+    L: float = 500000.0          # starting capital, INITIAL currency
+    T: float = 396000.0          # target, TARGET currency
+    A: float = 0.0              # residue penalty on leftover initial currency
+    B: float = 0.20               # deficit penalty on the target shortfall below T
+    rounds: int = 4               # trading rounds (round n+1 = settlement draw only)
     K: int = 1                   # sequential offers per round; 1 = one guess
-    side: str = "A"               # "A": pounds -> dollars (T1); "B": reverse (T4)
+    side: str = "B"               # "A": pounds -> dollars (T1); "B": reverse (T4)
     params: GameParams = field(default_factory=GameParams)
 
 

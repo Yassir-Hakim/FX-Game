@@ -517,7 +517,7 @@ def main():
     print("  method: direct policy optimisation through a differentiable "
           "simulator (neural stochastic control) -- NOT model-free RL")
     if GATE == "hard":
-        print("  GATE=hard: Avi's recipe literally; autodiff through the "
+        print("  GATE=hard: autodiff through the "
               "indicator (known-biased gradient, kept to show it)")
     else:
         print(f"  GATE=smoothed: tau anneal {TAU_START} -> {TAU_END} x the "

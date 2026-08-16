@@ -351,9 +351,12 @@ def gate_terminal_wealth(spec, eps, verbose=True):
     """Every episode record's P/L rebuilt through v2's own terminal_wealth."""
     worst = 0.0
     for e in eps:
+        # run_paths ALREADY stores role order -- it records initial-currency/L
+        # as "held" and target-currency/T as "banked" -- and terminal_wealth
+        # takes role order too (rl_env calls it the same way). Reordering here
+        # a second time is the identity on side A and swaps the two on side B.
         held, banked = e["held"][-1] * spec.L, e["banked"][-1] * spec.T
-        c, d = (held, banked) if spec.side == "A" else (banked, held)
-        W = terminal_wealth(spec, c, d, e["a_end"])
+        W = terminal_wealth(spec, held, banked, e["a_end"])
         worst = max(worst, abs((W - spec.L) / spec.L - e["pl"]))
     ok = worst < 1e-9
     if verbose:
@@ -405,32 +408,31 @@ def plot_learning_curve(save_path, xs, ys, dp_ref, bdc_pl, xlabel="episode",
 
 
 def _eps_to_trace(spec, e):
-    """One episode record -> v2's own trace dict, so plot_game can draw it."""
+    """One episode record -> v2's own trace dict, so plot_game can draw it.
+
+    v2's traces are ROLE-ordered: play_game starts (c, d) = (spec.L, 0) and
+    hands them to terminal_wealth, and plot_game draws c/L as the initial
+    currency draining and d/T as the target banked. run_paths already records
+    that order, so "held" IS c and "banked" IS d on BOTH sides -- reordering
+    by side here would swap the two curves and cross-divide them on side B."""
     sd, a, greed = spec.params.sd, spec.params.a0, _greed(spec)
     rounds = []
     for n in range(1, spec.rounds + 1):
         j = n - 1
         quote = e["offers"][j]
-        held_end, bank_end = e["held"][2 * n], e["banked"][2 * n]
-        c = held_end * spec.L if spec.side == "A" else bank_end * spec.T
-        d = bank_end * spec.T if spec.side == "A" else held_end * spec.L
+        c, d = e["held"][2 * n] * spec.L, e["banked"][2 * n] * spec.T
         offers = []
         if abs(e["sizes"][j]) > 1e-6 and e["q_off"][j] > 1e-6:
             h_off, b_off = e["held"][2 * j + 1], e["banked"][2 * j + 1]
             offers.append({"offer_no": 1, "z": (quote - a) / sd * greed,
                            "P": trade_rate(quote, spec.side), "quote": quote,
                            "q": e["q_off"][j], "accepted": bool(e["fills"][j]),
-                           "c": h_off * spec.L if spec.side == "A"
-                                else b_off * spec.T,
-                           "d": b_off * spec.T if spec.side == "A"
-                                else h_off * spec.L})
+                           "c": h_off * spec.L, "d": b_off * spec.T})
         rounds.append({"n": n, "anchor": a, "X": e["X"][j], "offers": offers,
                        "bdc_dump": e["dump_amt"][j], "c": c, "d": d})
         a = e["X"][j]
-    h_end, b_end = e["held"][-1], e["banked"][-1]
     return {"spec": spec, "rounds": rounds, "a5": e["a_end"],
-            "c": h_end * spec.L if spec.side == "A" else b_end * spec.T,
-            "d": b_end * spec.T if spec.side == "A" else h_end * spec.L,
+            "c": e["held"][-1] * spec.L, "d": e["banked"][-1] * spec.T,
             "W": spec.L * (1 + e["pl"]), "pl": e["pl"]}
 
 

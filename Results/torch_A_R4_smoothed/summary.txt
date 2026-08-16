@@ -1,0 +1,58 @@
+==============================================================================
+ SUMMARY  |  side A, rounds 4, K 1, 20,000 paired paths
+==============================================================================
+ game (from rl_env): L 100,000 GBP, target 125,000, holding fee 2%, shortfall 3%
+ market: a0 1.25, sd 0.05, BdC fee 2%
+ provenance: path seed 123, 20,000 paths, written 2026-08-16 18:56
+
+MEAN P/L  (levels are floor-anchored: analytic always-BdC floor +
+the paired difference below. Raw 20k MC means carry ~+/-0.11% and can
+even land below the floor by chance; they are not shown.)
+  torch                        -1.4177% +/- 0.0056%   (-1,418 +/- 6 GBP)
+  DP optimum (replayed)        -1.4179% +/- 0.0063%   (-1,418 +/- 6 GBP)
+  always-BdC                   -1.4441%  (analytic, exact)
+
+  paired differences (common random numbers -- the only way the signal clears the noise):
+  torch - always-BdC           +0.0264% +/- 0.0056%   (+26 +/- 6 GBP)
+  DP - always-BdC (prize)      +0.0262% +/- 0.0063%   (+26 +/- 6 GBP)
+  DP - torch (regret)          -0.0003% +/- 0.0038%   (-0 +/- 4 GBP)
+
+  DP table value -1.2228% -- inflated by the maximisation bias that
+  compounds through backward induction. The replayed value above is the quotable one.
+
+THE FIRST OFFER  (round 1's observation is fixed, so a deterministic
+policy makes the SAME opening offer in every single game)
+  torch        quote 1.3226 $/GBP  (z = +1.45 sd)  size 99.9% of the book
+               fill probability 7.3%
+  DP optimum   quote 1.3167 $/GBP  (z = +1.33 sd)  size 100.0% of the book
+               fill probability 9.1%
+  v0 one-shot  |z*| = 1.44 sd  (the closed form, no continuation value)
+
+OFFERS BY ROUND  (over the paths; 'shown' = a fillable offer was made)
+  round  shown%    z (sd)    size   fill%  BdC (signed)
+      1   100.0    +1.451   0.999     7.5        +0.988
+      2   100.0    +1.468   1.000     6.9        +0.999
+      3    99.3    +1.444   1.000     7.5        +0.981
+      4    80.0    +1.405   1.000     8.4        +0.732
+
+  DP fresh-book quote by round (full book, anchor a0):
+    round 1: 1.3167 $/GBP  (z = +1.33 sd)
+    round 2: 1.3167 $/GBP  (z = +1.33 sd)
+    round 3: 1.3167 $/GBP  (z = +1.33 sd)
+    round 4: 1.3167 $/GBP  (z = +1.33 sd)
+
+THE SET PATH  (fixed across runs; see set_path.png)
+  torch on the set path:
+    r1  a=1.25 X=1.30   offer 1.3226 on 99,903 (rejected);   BdC moves 98,827
+    r2  a=1.30 X=1.36   offer 1.3713 on 1,173 (rejected);   BdC moves 1,172
+    r3  a=1.36 X=1.37   offer 1.4272 on 1 (rejected);   BdC moves 1
+    r4  a=1.37 X=1.41   offer 1.4375 on 0 (rejected);   BdC moves 0
+    settle a_end=1.33   P/L -4.159%
+  DP on the set path:
+    r1  a=1.25 X=1.30   offer 1.3167 on 100,000 (rejected);   BdC moves 100,000
+    r2  a=1.30 X=1.36   no offer;   BdC moves 0
+    r3  a=1.36 X=1.37   no offer;   BdC moves 0
+    r4  a=1.37 X=1.41   no offer;   BdC moves 0
+    settle a_end=1.33   P/L -4.211%
+
+FILES: representative_path.png, set_path.png, pl_hist.png, learning_curve.png, summary.txt

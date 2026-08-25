@@ -49,7 +49,7 @@ from Mechanics.fx_mechanics import (
 
 @dataclass
 class TraderSpec:
-    side: str = "A"       # "A": starts in pounds, wants dollars 
+    side: str = "B"       # "A": starts in pounds, wants dollars 
                           # "B": starts in dollars, wants pounds 
     max_offers: int = 10
     params: GameParams = field(default_factory=GameParams)

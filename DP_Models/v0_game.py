@@ -214,6 +214,23 @@ def closed_form_optimal_rate(
     )
 
 
+def offer_is_interior(P, a0=A0_DEFAULT, sd=sd_DEFAULT, f=BDC_FEE_DEFAULT,
+                      side="A"):
+    """Is P a genuine stationary point of g, or a search-bracket edge?
+
+    closed_form_optimal_rate root-finds h inside a +/-8 sd bracket; when no
+    interior root exists (side B once the offer channel is dominated, sigma
+    >~ 0.088 at the card fee) it falls back to the better bracket EDGE, whose
+    VALUE is the never-fill floor but whose location is just the bracket
+    half-width -- numerics, not economics. The test must be RELATIVE: eight
+    sd out, both FOC terms are ~1e-16, so their difference passes any
+    absolute tolerance and a boundary impersonates a root. Scaled by the
+    terms' own size, the ratio is 0 at a real optimum and O(1) at an edge."""
+    cost = f * (P / sd) * norm.pdf((P - a0) / sd)
+    gap = h(P, a0, sd, f, side)                  # fill - cost
+    return abs(gap) / max(gap + 2.0 * cost, 1e-300) < 1e-6
+
+
 def expected_target_per_unit(P, a0=A0_DEFAULT, sd=sd_DEFAULT, f=BDC_FEE_DEFAULT,
                                side="A"):
     """g(P) = P*(1-Phi(z)) + (1-f)*(a0*Phi(z) - sd*phi(z)),  z=(P-a0)/sd
@@ -290,9 +307,18 @@ def plot(spec=None, n_games: int = 5_000, save_path: str = "v0_plot.png"):
     plt.figure(figsize=(8, 5))
     plt.plot(x, mc_curve, lw=1, alpha=0.55, label=f"Monte Carlo ({n_games:,}/pt)")
     plt.plot(x, cf_curve, lw=2, label="Closed form g(P)")
-    plt.axvline(trade_rate(P_star, side), ls="--", color="k",
-                label=f"offer* = {trade_rate(P_star, side):.4f} {unit}"
-                      f"  (slip quote {P_star:.4f} $/GBP, {(P_star-a0)/sd:+.2f}σ)")
+    if offer_is_interior(P_star, a0, sd, fee, side):
+        plt.axvline(trade_rate(P_star, side), ls="--", color="k",
+                    label=f"offer* = {trade_rate(P_star, side):.4f} {unit}"
+                          f"  (slip quote {P_star:.4f} $/GBP, "
+                          f"{(P_star-a0)/sd:+.2f}σ)")
+    else:
+        # no interior optimum: the solver fell back to a bracket edge, an
+        # arbitrary representative of the never-fill region. Its VALUE is the
+        # BdC-only floor; its location is numerics, so draw no line for it.
+        plt.plot([], [], " ",
+                 label=f"no interior optimum at σ = {sd:g}: offer "
+                       f"channel dominated -- never fill, BdC-only")
     plt.axhline(bdc_only, ls=":", color="grey",
                 label=f"BdC-only = {bdc_only:.4f}")
     plt.xlabel(f"Offer rate ({unit} -- target currency per unit held)")
@@ -313,7 +339,12 @@ if __name__ == "__main__":
     unit = rate_units(spec.side)
     print(f"v0, side {spec.side}  (holds "
           f"{'pounds, wants dollars' if spec.side == 'A' else 'dollars, wants pounds'})")
-    print(f"  best offer                {offer:.4f} {unit}")
+    if offer_is_interior(quote, p.a0, p.sd, p.bdc_fee, spec.side):
+        print(f"  best offer                {offer:.4f} {unit}")
+    else:
+        print(f"  best offer                none -- offer channel dominated "
+              f"(never fill; {offer:.4f} {unit} is the search-bracket edge, "
+              f"not an optimum)")
     print(f"  expected target per unit  {g:.6f} {unit}")
     print(f"  BdC-only floor            {floor:.6f} {unit}")
     print(f"  perfect information       {pinf:.6f} {unit}")

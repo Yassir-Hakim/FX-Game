@@ -1,0 +1,65 @@
+==============================================================================
+ SUMMARY  |  side A, rounds 4, K 1, 20,000 paired paths
+==============================================================================
+ game (from rl_env): L 100,000 GBP, target 125,000, holding fee 2%, shortfall 3%
+ market: a0 1.25, sd 0.05, BdC fee 2%
+ provenance: path seed 123, 20,000 paths, written 2026-08-26 12:20
+
+MEAN P/L  (levels are floor-anchored: analytic always-BdC floor +
+the paired difference below. Raw 20k MC means carry ~+/-0.11% and can
+even land below the floor by chance; they are not shown.)
+  generalist                   -1.4402% +/- 0.0016%   (-1,440 +/- 2 GBP)
+  DP optimum (replayed)        -1.4179% +/- 0.0063%   (-1,418 +/- 6 GBP)
+  always-BdC                   -1.4441%  (analytic, exact)
+
+  paired differences (common random numbers -- the only way the signal clears the noise):
+  generalist - always-BdC      +0.0039% +/- 0.0016%   (+4 +/- 2 GBP)
+  DP - always-BdC (prize)      +0.0262% +/- 0.0063%   (+26 +/- 6 GBP)
+  DP - generalist (regret)     +0.0223% +/- 0.0068%   (+22 +/- 7 GBP)
+
+  DP table value -1.2228% -- inflated by the maximisation bias that
+  compounds through backward induction. The replayed value above is the quotable one.
+
+THE FIRST OFFER  (round 1's observation is fixed, so a deterministic
+policy makes the SAME opening offer in every single game)
+  generalist   quote 1.3740 $/GBP  (z = +2.48 sd)  size 99.7% of the book
+               fill probability 0.7%
+  DP optimum   quote 1.3167 $/GBP  (z = +1.33 sd)  size 100.0% of the book
+               fill probability 9.1%
+  v0 one-shot  |z*| = 1.44 sd  (the closed form, no continuation value)
+
+OFFERS BY ROUND  (over the paths; 'shown' = a fillable offer was made)
+  round  shown%    z (sd)    size   fill%  BdC (signed)
+      1   100.0    +2.480   0.997     0.6        +0.991
+      2   100.0    +2.342   0.999     1.0        +0.997
+      3   100.0    +2.371   0.999     1.0        +0.996
+      4   100.0    +2.380   0.998     0.9        +0.995
+
+  DP fresh-book quote by round (full book, anchor a0):
+    round 1: 1.3167 $/GBP  (z = +1.33 sd)
+    round 2: 1.3167 $/GBP  (z = +1.33 sd)
+    round 3: 1.3167 $/GBP  (z = +1.33 sd)
+    round 4: 1.3167 $/GBP  (z = +1.33 sd)
+
+THE WIDER WORLD  (torch engine, hard game, 200,000 fresh paths in 200 markets,
+a0 ~ U(1.1, 1.4), sd ~ U(0.025, 0.075); the card played on the SAME shocks)
+                                       mean P/L     over always-BdC (paired)
+  generalist, window           -1.4623% +/- 0.0373%     +0.0005% +/- 0.0008%
+  generalist, card             -1.4301% +/- 0.0361%     +0.0041% +/- 0.0005%
+  paths touching zero: 0 of 3,020,000 built this run (dropped, per Avi)
+
+THE SET PATH  (fixed across runs; see set_path.png)
+  generalist on the set path:
+    r1  a=1.25 X=1.30   offer 1.3740 on 99,733 (rejected);   BdC moves 99,163
+    r2  a=1.30 X=1.36   offer 1.4138 on 836 (rejected);   BdC moves 834
+    r3  a=1.36 X=1.37   offer 1.4700 on 3 (rejected);   BdC moves 3
+    r4  a=1.37 X=1.41   offer 1.4853 on 0 (rejected);   BdC moves 0
+    settle a_end=1.33   P/L -4.174%
+  DP on the set path:
+    r1  a=1.25 X=1.30   offer 1.3167 on 100,000 (rejected);   BdC moves 100,000
+    r2  a=1.30 X=1.36   no offer;   BdC moves 0
+    r3  a=1.36 X=1.37   no offer;   BdC moves 0
+    r4  a=1.37 X=1.41   no offer;   BdC moves 0
+    settle a_end=1.33   P/L -4.211%
+
+FILES: representative_path.png, set_path.png, pl_hist.png, learning_curve.png, summary.txt

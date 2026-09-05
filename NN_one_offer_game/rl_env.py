@@ -73,7 +73,7 @@ class GameSpec(TraderSpec):
     T: float = 125000.0          # target, TARGET currency
     A: float = 0.02              # residue penalty on leftover initial currency
     B: float = 0.03               # deficit penalty on the target shortfall below T
-    rounds: int = 4               # trading rounds (round n+1 = settlement draw only)
+    rounds: int = 1               # trading rounds (round n+1 = settlement draw only)
     K: int = 1                   # sequential offers per round; 1 = one guess
     side: str = "A"               # "A": pounds -> dollars ; "B": reverse 
     params: GameParams = field(default_factory=GameParams)

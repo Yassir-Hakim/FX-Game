@@ -1,0 +1,15 @@
+ SUMMARY  |  side A, rounds 4, K 1, 20,000 paths
+   card             L 100,000  T 125,000  A 0.02  B 0.03
+   MM fee           0.01   (its own Bureau cost; the trader never sees it)
+   trader BdC fee   0.02
+   hard-game P/L    -1.4590% +/- 0.1128%
+   always-Bureau    -1.4441%   (the outside option)
+   edge over floor  -0.0149%
+   filled           0.04% of offered volume
+   round-1 quote/a0 1.1207
+   set path         1.3, 1.36, 1.37, 1.41, 1.33  ->  P/L -4.201%
+
+   no DP line: the exact solution has been derived for an MM that
+   accepts at the true rate, not for one that charges itself a fee.
+   Replayed through mm_train's fee-aware+flatten rule, which check 1F
+   certifies equal to torch_train_fee.rollout at this fee.

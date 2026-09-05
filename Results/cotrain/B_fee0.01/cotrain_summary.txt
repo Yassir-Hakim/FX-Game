@@ -1,0 +1,27 @@
+ SUMMARY  |  co-trained pair, side B, MM fee 0.01, 4 rounds, K 1, 200,000 evaluation paths
+   card             L 200,000  T 155,000  A 0.03  B 0.02   a0 1.25  sd 0.05
+   fees             trader BdC 0.02   MM 0.01 (its own Bureau cost)
+   training         20 outer x 100 iterations x 1,000 games per agent, mm first, MM level init conservative
+                    trader LR 0.001 + plateau decay, MM LR 0.0001
+   blocks           19 measured (0 = as initialised);  flat: stopped at outer step 8
+
+ HARD GAME  |  200,000 fresh paths, every comparison paired
+   MM P/L           +0.03 bp +/- 0.04   of the game's capital (GBP 160,000)
+   trader P/L       -2.0128% +/- 0.0336%   (raw: this bar is the rate path, not the policy)
+   always-BdC       -2.0117%   on the same paths   (analytic -2.0210%, check 5)
+   trader edge      -0.0011% +/- 0.0030%   over always-BdC, paired
+   vs naive+flatten   MM   +0.01 bp   co MM - rule +0.03 +/- 0.04 bp   trader vs this rule -2.0124%
+   vs naive+carry     MM   +0.05 bp   co MM - rule -0.01 +/- 0.08 bp   trader vs this rule -2.0124%
+   vs fee-aware+flatten MM   +0.02 bp   co MM - rule +0.01 +/- 0.04 bp   trader vs this rule -2.0128%
+   vs fee-aware+carry MM   +0.04 bp   co MM - rule -0.01 +/- 0.02 bp   trader vs this rule -2.0128%
+   verdicts         agree with naive on 100.0% of offered volume;  filled 0.0% (naive 0.0%)
+   threshold P/X    r1 1.0149  r2 0.9693  r3 0.9807  r4 1.0040   (fitted to the verdicts; nan = no volume)
+   repay on short   r1 0.044  r2 0.051  r3 0.061  r4 0.072
+   round-1 quote    1.0831 $/GBP (median)
+   set path         1.3, 1.36, 1.37, 1.41, 1.33  ->  MM +0.00 bp   trader -0.527%   (always-BdC on it +0.205%)
+
+ CROSS-PLAY  |  none: cotrain ran without Phase 1's artefacts for this side and fee
+
+   no DP row: the exact solution is derived for an MM that accepts at
+   the true rate. Against a learned MM it is neither a ceiling nor a
+   floor, so it is not drawn here.

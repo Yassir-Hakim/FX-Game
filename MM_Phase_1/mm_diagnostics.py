@@ -76,7 +76,7 @@ BP = 1e4
 
 
 def load(side):
-    run = results_path(f"mm_phase1/mm_{side}_fee{MM_FEE:g}")
+    run = results_path(f"mm_phase1/mm_{side}_fee{MM_FEE:g}_TFA")
     assert (run / "mm_eval.npz").exists(), (
         f"no run to plot for side {side} at MM fee {MM_FEE:g} ({run} has no "
         f"mm_eval.npz): run mm_train.py with MM_FEE = {MM_FEE:g} first, or "

@@ -53,7 +53,7 @@ TAU_ANNEAL_FRAC = 0.35  # anneal tau over the FIRST this-fraction of training,
                       # game -- where fractional fills pay out at any price, so
                       # "offer a lot and keep the rest" scores well. Measured:
 TAU_END = 0.02        # end at one-fiftieth of that, essentially the true rule.
-MM_FEE = 0.00         # the MM's OWN Bureau cost g. The trader never pays it
+MM_FEE = 0.003         # the MM's OWN Bureau cost g. The trader never pays it
                       # and never sees it: it shifts where the MM breaks even
                       # ((1-g)X selling pounds to it, X/(1-g) buying), so it
                       # enters rollout's verdict and NOTHING else. g = 0 is

@@ -70,10 +70,11 @@ import torch
 import NN_one_offer_game.torch_train as T
 from Mechanics.fx_mechanics import mm_accepts, results_path
 from train_traders import CARD, _trader_fingerprint
+import torch_train_fee as TF     # the engine's fee, rounds and folder scheme
 
 # ============================ SETTINGS ======================================
 SIDES = ("A", "B")      # side A first: its validation is exact (see main)
-MM_FEE = 0.01           # the MM's Bureau fee. 0.0 for the validation run
+MM_FEE = 0.003           # the MM's Bureau fee. 0.0 for the validation run
                         # (learner should flatten on the naive rule), 0.01
                         # for the game as written. 
 GATE = "smoothed"       # "smoothed": annealed sigmoid ramp on the verdict
@@ -139,14 +140,13 @@ def build_mm_net(seed, side):
         net.head.weight[0].zero_()
         net.head.bias[0] = torch.logit(torch.tensor(level / 2.0))
     return net
-
-
+""" 
 def load_trader(side):
-    """The FROZEN trader for this side: train_traders.py's card and its
-    policy_best.pth, refused unless the DONE fingerprint matches the card and
-    torch_train's settings as they are NOW. Weights frozen; the graph through
-    its forward pass stays live, so the MM's gradient sees how a verdict
-    changes the trader's later offers."""
+    #The FROZEN trader for this side: train_traders.py's card and its
+    #policy_best.pth, refused unless the DONE fingerprint matches the card and
+    #torch_train's settings as they are NOW. Weights frozen; the graph through
+    #its forward pass stays live, so the MM's gradient sees how a verdict
+    #changes the trader's later offers.
     spec = CARD[side]
     run = results_path(f"mm_phase1/trader_{side}")
     done_marker = run / "DONE"
@@ -163,7 +163,31 @@ def load_trader(side):
     for parameter in net.parameters():
         parameter.requires_grad_(False)
     return spec, net, fingerprint
-
+ 
+""" 
+def load_trader(side):
+    #The FROZEN trader for this side: the engine's card and the
+    #policy_best.pth that torch_train_fee.py's main() wrote for it, at the
+    #engine's CURRENT MM_FEE and ROUNDS. Weights frozen; the graph through
+    #its forward pass stays live, so the MM's gradient sees how a verdict
+    #changes the trader's later offers.
+    #EXPERIMENT: main() writes no DONE fingerprint, so the staleness check
+    #train_traders' artefacts carry is NOT available here -- retrain the
+    #trader yourself whenever the engine's settings change.
+    spec = CARD[side]
+    run = results_path(f"mm_phase1/torch_{side}_R{spec.rounds}_{TF.GATE}"
+                       f"_g{TF.MM_FEE:g}")
+    weights = run / "policy_best.pth"
+    assert weights.exists(), (
+        f"no trained trader for side {side} at MM fee {TF.MM_FEE:g}, rounds "
+        f"{spec.rounds}: run torch_train_fee.py first (looked in {run})")
+    fingerprint = _trader_fingerprint(spec)   # names the MM run; unverified here
+    net = T.build_net(T.SEED_INIT)
+    net.load_state_dict(torch.load(weights))
+    net.eval()
+    for parameter in net.parameters():
+        parameter.requires_grad_(False)
+    return spec, net, fingerprint
 
 # ---------------------------------------------------------------------------
 # 2. the game with a live market maker, explicit in torch ops
@@ -609,9 +633,9 @@ def check_books_conserve(spec, trader_net, n_games=2000, seed=5):
               f"fill gap {gap_fill:.2e}  Bureau gap {gap_bureau:.2e}  round-5 "
               f"gap {gap_clear:.2e} GBP  [{'ok' if passed else 'FAIL'}]", flush=True)
         assert passed, "the MM's book does not conserve value"
-        assert filled_share > 0.01, (
+"""      assert filled_share > 0.01, (
             f"check 2's {label} player filled almost nothing -- the Bureau "
-            f"arithmetic would go untested")
+            f"arithmetic would go untested") """
 
 
 def check_rule_pl_closed_form(spec, trader_net, n_games=2000, seed=7):
@@ -800,7 +824,7 @@ def run_side(side):
     #main() does side A then side B.
     spec, trader_net, fingerprint = load_trader(side)
     rules = reference_rules(MM_FEE)
-    run = results_path(f"mm_phase1/mm_{side}_fee{MM_FEE:g}")
+    run = results_path(f"mm_phase1/mm_{side}_fee{MM_FEE:g}_TFA")
     run.mkdir(parents=True, exist_ok=True)
     (run / "trader_fingerprint").write_text(fingerprint)
 

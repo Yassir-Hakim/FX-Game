@@ -3,7 +3,7 @@
 ==============================================================================
  game (from rl_env): L 100,000 GBP, target 125,000, holding fee 2%, shortfall 3%
  market: a0 1.25, sd 0.05, BdC fee 2%
- provenance: path seed 123, 20,000 paths, written 2026-08-19 15:11
+ provenance: path seed 123, 20,000 paths, written 2026-08-29 23:35
 
 MEAN P/L  (levels are floor-anchored: analytic always-BdC floor +
 the paired difference below. Raw 20k MC means carry ~+/-0.11% and can
